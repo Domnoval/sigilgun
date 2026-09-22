@@ -7,9 +7,9 @@ controls when you want them.
 
 ## Run
 
-Open index.html in a modern browser with the adjacent studio.js, studio.css and
-assets folder in place. No build or runtime dependencies are required. For a
-consistent local recovery origin, serve this folder with a static HTTP server.
+Serve this folder with a static HTTP server, including index.html, studio.js,
+print-room.js, studio.css and assets. No build or runtime dependencies are required.
+An HTTP origin supports local recovery and the isolated Print Room renderer.
 
 The Node dependencies are only for development tests.
 
@@ -28,6 +28,7 @@ The Node dependencies are only for development tests.
 - **Burst** generates a composition with the current settings. Undo takes it back.
 - **Project** saves/opens projects, resumes a browser session and starts a new canvas.
 - **Export** downloads PNG, SVG or an editable project.
+- **Print** opens a physical-size preview and full-resolution file download.
 
 On phones, controls live in sheets and the drawing uses the width of the screen.
 New phone documents start portrait (900 × 1200); larger screens start landscape
@@ -96,7 +97,29 @@ export the currently selected appearance; the Export panel says which one.
 Switch off UV to export daylight. Physical fluorescent printing requires a
 specialist ink and supplier; a standard print only reproduces the rendered look.
 
-Print ordering and the optional guided welcome are pinned in [TODO.md](TODO.md).
+## Print room preview
+
+Print captures the current composition and opens it in a separate rendering
+workspace. Pick a paper size, daylight or UV appearance, and whole-artwork fit or
+centered crop. These choices do not alter your drawing or its recovery copy.
+The wall is an illustration; the image on the paper uses the actual output layout.
+
+New vector artwork gets three suggested paper sizes. Imported raster artwork gets
+up to three smaller choices based on a 150-PPI detail floor; if none meet it, the
+smallest option remains available with a warning. Enlarging a bitmap does not add
+detail. Rendered output is up to 300 PPI, bounded by 40 megapixels and 8,000 pixels
+per edge. The file name and print plan state its dimensions and resolution.
+
+Save print file downloads a PNG rendered by the same engine without guides, wall
+or editor. Save print plan downloads the captured editable project plus paper,
+lighting and fit choices. The plan is a handoff document, not a paid order. Use
+Project → Open project to recover its editable art and chosen light. Reopening
+Print starts a fresh paper/fit selection; the saved choices remain in the plan.
+
+**Purchasing is not enabled.** Dedicated Shopify custom-print variants, pricing,
+immutable file storage and verified paid-order fulfillment remain to connect.
+See [the implementation contract](docs/PRINT-ROOM.md) and [TODO.md](TODO.md).
+The optional beach-guide treatment is in [docs/FLAMINGO-GUIDE.md](docs/FLAMINGO-GUIDE.md).
 
 ## Development checks
 

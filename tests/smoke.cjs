@@ -124,6 +124,20 @@ async function closeDialog(page, dialog) {
   }
 }
 
+async function waitForPrintPreview(page, previousSrc = '') {
+  return poll(async () => page.locator('#printPreview').evaluate((image, previous) => {
+    if (image.hidden || !image.complete || !image.naturalWidth || image.src === previous) return null;
+    return { src: image.src, width: image.naturalWidth, height: image.naturalHeight };
+  }, previousSrc), 'print preview did not finish rendering', 20000);
+}
+
+async function openPrintRoom(page) {
+  await page.waitForFunction(() => !!window.PrintRoom && !!document.querySelector('#printOpen'));
+  await page.locator('#printOpen').click();
+  await page.locator('#printDialog').waitFor({ state: 'visible' });
+  return waitForPrintPreview(page);
+}
+
 async function drawAt(page, xFraction, yFraction = 0.5, touch = false) {
   const canvas = page.locator('#cv');
   const box = await canvas.boundingBox();
@@ -305,6 +319,12 @@ async function decodePng(page, buffer) {
   }, buffer.toString('base64'));
 }
 
+function pngDimensions(buffer) {
+  assert(buffer.length > 24, 'PNG download is empty');
+  assert.equal(buffer.subarray(1, 4).toString('ascii'), 'PNG', 'download is not a PNG');
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
 async function comparePngToCanvas(page, buffer) {
   return page.evaluate(async base64 => {
     const bytes = Uint8Array.from(atob(base64), character => character.charCodeAt(0));
@@ -338,6 +358,48 @@ async function comparePngToCanvas(page, buffer) {
       canvas: [source.width, source.height],
     };
   }, buffer.toString('base64'));
+}
+
+async function comparePngToPrintPreview(page, buffer) {
+  return page.evaluate(async ({ base64, selector }) => {
+    const image = document.querySelector(selector);
+    const previewBlob = await fetch(image.src).then(response => response.blob());
+    const preview = await createImageBitmap(previewBlob);
+    const bytes = Uint8Array.from(atob(base64), character => character.charCodeAt(0));
+    const exported = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+    const sampleWidth = 96;
+    const sampleHeight = Math.max(1, Math.round(sampleWidth * preview.height / preview.width));
+    const sample = bitmap => {
+      const canvas = document.createElement('canvas');
+      canvas.width = sampleWidth;
+      canvas.height = sampleHeight;
+      const context = canvas.getContext('2d');
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = 'high';
+      context.drawImage(bitmap, 0, 0, sampleWidth, sampleHeight);
+      return context.getImageData(0, 0, sampleWidth, sampleHeight).data;
+    };
+    const a = sample(preview);
+    const b = sample(exported);
+    let total = 0;
+    let max = 0;
+    for (let index = 0; index < a.length; index += 4) {
+      for (let channel = 0; channel < 3; channel++) {
+        const delta = Math.abs(a[index + channel] - b[index + channel]);
+        total += delta;
+        max = Math.max(max, delta);
+      }
+    }
+    const result = {
+      meanChannelDelta: total / (sampleWidth * sampleHeight * 3),
+      maxChannelDelta: max,
+      preview: [preview.width, preview.height],
+      exported: [exported.width, exported.height],
+    };
+    preview.close();
+    exported.close();
+    return result;
+  }, { base64: buffer.toString('base64'), selector: '#printPreview' });
 }
 
 async function renameActiveLayer(page, name) {
@@ -1020,6 +1082,160 @@ test('undo and redo keep the symbol cabinet selection in sync', () =>
     );
     await closeDialog(page, '#symbolsDialog');
   }));
+
+test('print room freezes the drawing while light and fit change only the print plan', () =>
+  withApp(async page => {
+    await page.evaluate(() => window.SigilStudio.newProject(1100, 700));
+    await prepareCanvas(page);
+    await page.evaluate(() => window.SigilStudio.selectInk('#ff2e7e', true));
+    await drawAt(page, 0.32, 0.46);
+    await page.waitForFunction(() => !!localStorage.getItem('sigil-studio-recovery-v2'));
+    const before = await page.evaluate(() => ({
+      project: window.SigilStudio.getProject(),
+      recovery: localStorage.getItem('sigil-studio-recovery-v2'),
+    }));
+
+    let preview = await openPrintRoom(page);
+    const firstPlan = await page.evaluate(() => window.PrintRoom.getPlan());
+    assert.deepEqual(firstPlan.project, before.project, 'print room did not capture the exact project');
+    assert.equal(firstPlan.appearance, 'daylight');
+    assert.equal(firstPlan.fit, 'contain');
+    assert.equal(firstPlan.orderingEnabled, false, 'unverified ordering was accidentally enabled');
+
+    await page.locator('#printUV').click();
+    preview = await waitForPrintPreview(page, preview.src);
+    await page.locator('#printFill').click();
+    await waitForPrintPreview(page, preview.src);
+    const changedPlan = await page.evaluate(() => window.PrintRoom.getPlan());
+    assert.equal(changedPlan.appearance, 'uv-look');
+    assert.equal(changedPlan.fit, 'cover');
+    assert.equal(changedPlan.project.settings.uvLight, true, 'plan did not capture its UV appearance');
+    const normalizedChangedProject = structuredClone(changedPlan.project);
+    normalizedChangedProject.settings.uvLight = before.project.settings.uvLight;
+    assert.deepEqual(
+      normalizedChangedProject,
+      before.project,
+      'changing the print appearance or fit mutated captured geometry or materials',
+    );
+
+    const savedPlan = await download(page, '#printPlan');
+    assert.match(savedPlan.name, /^sigil-print-.*\.json$/);
+    const parsedPlan = JSON.parse(savedPlan.buffer.toString('utf8'));
+    assert.equal(parsedPlan.format, 'sigil-print-plan');
+    assert.equal(parsedPlan.orderingEnabled, false);
+    assert.equal(parsedPlan.appearance, 'uv-look');
+    assert.equal(parsedPlan.fit, 'cover');
+    assert.deepEqual(parsedPlan.project, changedPlan.project, 'downloaded print plan lost the frozen project');
+
+    // The hidden renderer shares the origin, so wait past the recovery debounce and
+    // prove that it cannot replace the creator's recoverable live document.
+    await page.waitForTimeout(1450);
+    const after = await page.evaluate(() => ({
+      project: window.SigilStudio.getProject(),
+      recovery: localStorage.getItem('sigil-studio-recovery-v2'),
+    }));
+    assert.deepEqual(after.project, before.project, 'print rendering changed the live drawing');
+    assert.equal(after.recovery, before.recovery, 'print renderer overwrote live recovery state');
+    await page.locator('#printClose').click();
+
+    await loadProject(page, parsedPlan, 'saved-print-plan.json');
+    const reopened = await poll(async () => {
+      const project = await page.evaluate(() => window.SigilStudio.getProject());
+      return project.settings.uvLight === true ? project : null;
+    }, 'downloaded print plan did not reopen with its selected appearance');
+    assert.deepEqual(reopened, parsedPlan.project, 'reopened print plan changed the frozen project');
+  }));
+
+test('print room preview and full-size PNG preserve the same paper composition', () =>
+  withApp(async page => {
+    await prepareCanvas(page);
+    await page.evaluate(() => window.SigilStudio.selectInk('#ff2e7e', true));
+    await drawAt(page, 0.24, 0.42);
+    await drawAt(page, 0.68, 0.6);
+    let preview = await openPrintRoom(page);
+
+    const selectedSizeId = await page.locator('#printSizes button[aria-pressed="true"]').getAttribute('data-size');
+    await page.locator('#printUV').click();
+    preview = await waitForPrintPreview(page, preview.src);
+    const plan = await page.evaluate(() => window.PrintRoom.getPlan());
+    assert.equal(plan.paper.id, selectedSizeId);
+    assert.equal(plan.appearance, 'uv-look');
+    assert.equal(plan.output.width * plan.output.height, 38880000, 'default statement print is not 38.9 MP');
+
+    const previewScale = 900 / Math.max(plan.paper.width, plan.paper.height);
+    assert.deepEqual(
+      [preview.width, preview.height],
+      [Math.round(plan.paper.width * previewScale), Math.round(plan.paper.height * previewScale)],
+      'preview bitmap does not use the selected paper ratio',
+    );
+
+    const exported = await download(page, '#printDownload');
+    assert.match(exported.name, new RegExp(`sigil-print-${selectedSizeId}in-uv-look-${plan.output.dpi}ppi\\.png$`));
+    assert.deepEqual(
+      pngDimensions(exported.buffer),
+      { width: plan.output.width, height: plan.output.height },
+      'full-size print PNG dimensions disagree with the plan',
+    );
+    const parity = await comparePngToPrintPreview(page, exported.buffer);
+    assert(
+      parity.meanChannelDelta < 6,
+      `preview and full-size print diverged: ${JSON.stringify(parity)}`,
+    );
+  }));
+
+test('print room controls fit folded and unfolded touch layouts', async () => {
+  for (const viewport of [{ width: 480, height: 1080 }, { width: 912, height: 912 }]) {
+    await withApp(async page => {
+      await prepareCanvas(page);
+      await drawAt(page, 0.5, 0.5, true);
+      const launcher = await page.locator('#printOpen').boundingBox();
+      assert(launcher && launcher.width >= 40 && launcher.height >= 40, 'Print control is too small to tap');
+      await openPrintRoom(page);
+      await page.locator('#printDialog').evaluate(async dialog => {
+        await Promise.all(dialog.getAnimations({ subtree: true }).map(animation => animation.finished));
+      });
+      const layout = await page.evaluate(() => {
+        const dialog = document.querySelector('#printDialog');
+        const bounds = dialog.getBoundingClientRect();
+        const controls = [...dialog.querySelectorAll('.print-options button')]
+          .map(button => button.getBoundingClientRect());
+        return {
+          viewport: document.documentElement.clientWidth,
+          documentWidth: document.documentElement.scrollWidth,
+          dialog: { left: bounds.left, right: bounds.right, width: bounds.width },
+          dialogClientWidth: dialog.clientWidth,
+          dialogScrollWidth: dialog.scrollWidth,
+          sizes: dialog.querySelectorAll('#printSizes button').length,
+          minimumControlHeight: Math.min(...controls.map(rect => rect.height)),
+          downloadVisible: !!document.querySelector('#printDownload')?.getClientRects().length,
+          planVisible: !!document.querySelector('#printPlan')?.getClientRects().length,
+        };
+      });
+      assert.equal(layout.sizes, 3, 'touch print room did not expose three suitable sizes');
+      assert(layout.downloadVisible && layout.planVisible, 'touch print actions are missing');
+      assert(layout.minimumControlHeight >= 40, 'touch print controls are too short to tap');
+      assert(
+        layout.dialog.left >= 0 && layout.dialog.right <= layout.viewport + 1,
+        `print room is clipped at ${viewport.width}px: ${JSON.stringify(layout)}`,
+      );
+      assert(
+        layout.dialogScrollWidth <= layout.dialogClientWidth + 1,
+        `print room scrolls sideways at ${viewport.width}px: ${JSON.stringify(layout)}`,
+      );
+      assert(layout.documentWidth <= layout.viewport + 1, 'print room widens the touch page');
+      await page.locator('#printUV').click();
+      await page.locator('#printFill').click();
+      assert.equal(await page.locator('#printUV').getAttribute('aria-pressed'), 'true');
+      assert.equal(await page.locator('#printFill').getAttribute('aria-pressed'), 'true');
+      await page.locator('#printClose').click();
+    }, {
+      viewport,
+      deviceScaleFactor: 2,
+      hasTouch: true,
+      isMobile: true,
+    });
+  }
+});
 
 test('local recovery offers and restores the last painted session', () =>
   withApp(async page => {

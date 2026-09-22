@@ -348,6 +348,7 @@ function compositeLayer(c,L,scale=1){
   }
   c.save();c.globalAlpha=L.opacity;c.globalCompositeOperation=L.blend;
   c.drawImage(source,0,0,W,H);c.restore();
+  if(scale!==1)source.width=source.height=1;
 }
 function compositeAll(guides=true){
   ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,W,H);
@@ -780,7 +781,7 @@ function applySnapshot(st){
 function undo(){if(busy)return false;endStroke();finishChange();if(!history.length)return false;future.push(collectState());applySnapshot(history.pop());dirty=true;status='Undone';scheduleRecovery();emitChange();return true;}
 function redo(){if(busy)return false;endStroke();finishChange();if(!future.length)return false;history.push(collectState());if(history.length>HISTORY_LIMIT)history.shift();applySnapshot(future.pop());dirty=true;status='Redone';scheduleRecovery();emitChange();return true;}
 function flushRecovery(){
-  clearTimeout(recoveryTimer);recoveryTimer=null;if(!dirty||busy)return;
+  clearTimeout(recoveryTimer);recoveryTimer=null;if(!dirty||busy||new URLSearchParams(location.search).get('renderer')==='print')return;
   try{localStorage.setItem(RECOVERY_KEY,JSON.stringify(collectState()));recoveryAvailable=true;recoveryError=false;}
   catch{recoveryError=true;status='Local recovery is full or unavailable. Save a project file.';}
   emitChange();
@@ -850,6 +851,28 @@ function exportPNG(scale=Number(document.getElementById('expK').value)||2){
   const c=document.createElement('canvas');c.width=Math.round(W*scale);c.height=Math.round(H*scale);const x=c.getContext('2d');x.scale(scale,scale);paintBackground(x);
   for(const L of layers)compositeLayer(x,L,scale);
   c.toBlob(blob=>{if(blob)download(blob,'sigil_'+c.width+'x'+c.height+'.png');else{status='PNG export failed. Try a smaller scale.';emitChange();}},'image/png');
+}
+// Reuse the canvas painter for physical-size files. In the print room this runs
+// in an isolated document containing a captured project, never the live canvas.
+function renderPrintPNG({width,height,fit='contain'}={}){
+  if(busy)throw new Error('The drawing is still loading.');
+  if(!Number.isInteger(width)||!Number.isInteger(height)||width<1||height<1||width>8000||height>8000||width*height>40000000)throw new Error('Choose a smaller print file.');
+  if(!['contain','cover'].includes(fit))throw new Error('Invalid paper fit.');
+  const scale=(fit==='cover'?Math.max:Math.min)(width/W,height/H);
+  // Cropping a very thin document can require enormous intermediate layers.
+  if(Math.round(W*scale)*Math.round(H*scale)>40000000||W*scale>8000||H*scale>8000)throw new Error('Use whole artwork fit for this canvas shape.');
+  const c=document.createElement('canvas');c.width=width;c.height=height;
+  const x=c.getContext('2d');if(!x)throw new Error('Print memory is unavailable. Try a smaller size.');
+  x.fillStyle='#ffffff';x.fillRect(0,0,width,height);
+  x.translate((width-W*scale)/2,(height-H*scale)/2);x.scale(scale,scale);
+  x.beginPath();x.rect(0,0,W,H);x.clip();paintBackground(x);
+  for(const L of layers)compositeLayer(x,L,scale);
+  return new Promise((resolve,reject)=>c.toBlob(blob=>{c.width=c.height=1;blob?resolve(blob):reject(new Error('Print rendering failed. Try a smaller size.'));},'image/png'));
+}
+function getPrintSourceInfo(){
+  const visible=layers.filter(L=>L.visible&&L.opacity>0);
+  const raster=visible.filter(L=>L.base).map(L=>{const i=baseImages.get(L.base);return {width:i?.width||W,height:i?.height||H};});
+  return {width:W,height:H,hasArtwork:visible.some(L=>L.base||stamps.some(st=>st.layerId===L.id)),raster};
 }
 const xml=v=>String(v).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[ch]));
 function stampSVG(st,i){
@@ -961,7 +984,8 @@ async function loadProject(input){
   endStroke();finishChange();const ticket=++loadVersion;busy=true;status='Loading project…';emitChange();
   try{
     if(input instanceof File&&input.size>50000000)throw new Error('Project file is too large');
-    const raw=input instanceof Blob?JSON.parse(await input.text()):input;
+    let raw=input instanceof Blob?JSON.parse(await input.text()):input;
+    if(raw?.format==='sigil-print-plan'&&raw.version===1)raw=raw.project;
     const st=await normalizeProject(raw);if(ticket!==loadVersion)return false;
     const before=collectState();applySnapshot(st);history.push(before);if(history.length>HISTORY_LIMIT)history.shift();future=[];dirty=true;status='Project loaded';busy=false;scheduleRecovery();emitChange();return true;
   }catch(error){if(ticket!==loadVersion)return false;busy=false;status='Load failed: '+error.message;emitChange();return false;}
@@ -984,7 +1008,7 @@ function setOption(key,value){
   return action('Settings changed',()=>{S[key]=next[key];if(key==='set')applySet();if(key==='uvLight')for(const L of layers)renderLayer(L);});
 }
 window.addEventListener('keydown',e=>{
-  if(e.defaultPrevented||e.altKey||e.target.closest?.('input,textarea,select,[contenteditable=true]'))return;
+  if(e.defaultPrevented||e.altKey||e.target.closest?.('input,textarea,select,[contenteditable=true]')||document.getElementById('printDialog')?.open)return;
   const key=e.key.toLowerCase(),mod=e.ctrlKey||e.metaKey;
   if(mod){if(key==='z'){e.preventDefault();e.shiftKey?redo():undo();}else if(key==='y'){e.preventDefault();redo();}else if(key==='s'){e.preventDefault();saveProject();}return;}
   if(e.repeat)return;
@@ -995,9 +1019,10 @@ try{recoveryAvailable=!!localStorage.getItem(RECOVERY_KEY);}catch{}
 window.SigilStudio={undo,redo,canUndo:()=>history.length>0||!!pendingBefore,canRedo:()=>future.length>0,save:saveProject,load:loadProject,clear:clearAll,refresh:()=>{resize();compositeAll();emitChange();},getState:summary,getBrushPreview,getInkAppearance,selectInk,setLayerShadow,getProject:()=>JSON.parse(JSON.stringify(collectState())),exportPNG,exportSVG,selectSymbol,setOption,newProject,autoSpray,applyLens,
   restoreRecovery:async()=>{try{const raw=localStorage.getItem(RECOVERY_KEY);return raw?loadProject(JSON.parse(raw)):false;}catch{status='Recovery file is unreadable';emitChange();return false;}},
   discardRecovery:()=>{try{localStorage.removeItem(RECOVERY_KEY);recoveryAvailable=false;emitChange();}catch{}},
-  getSVG:svgDocument};
+  getSVG:svgDocument,renderPrintPNG,getPrintSourceInfo};
 ready=true;emitChange();
 </script>
 <script src="studio.js"></script>
+<script src="print-room.js"></script>
 </body>
 </html>

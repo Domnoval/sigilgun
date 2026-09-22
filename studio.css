@@ -233,3 +233,52 @@ body.studio-ready #panel{display:none}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 @media(pointer:coarse){body.studio-ready #cv{cursor:crosshair}}
+
+/* Print room: the composition gets the space, controls remain within reach. */
+#printDialog{width:min(1160px,calc(100vw - 32px));max-height:94dvh;background:var(--surface)}
+#printDialog .dialog-heading{padding:25px 30px 22px}
+#printDialog .dialog-heading h2{font-size:clamp(28px,3vw,42px);letter-spacing:-1.7px;margin-top:8px}
+#printDialog .print-kicker{font:10px/1.5 var(--font-mono);letter-spacing:.1em;color:var(--copper);margin:0 0 13px}
+.print-layout{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(310px,1fr)}
+.print-scene{min-width:0;background:#e8dfce;color:var(--void);display:flex;flex-direction:column;position:relative}
+.print-wall{height:580px;max-height:64dvh;min-height:300px;display:grid;place-items:center;padding:40px 30px 60px;position:relative;overflow:hidden;background:radial-gradient(ellipse at 20% 0%,#f4eee3 0%,transparent 72%),linear-gradient(110deg,#d3c4aa,#e8dfce 53%,#d8cbb5)}
+.print-paper{width:min(100%,calc(min(440px,48dvh) * var(--paper-aspect,.75)));height:auto;min-width:0;aspect-ratio:var(--paper-ratio,3/4);position:relative;background:white;transform:scale(var(--paper-scale,1));box-shadow:1px 1px 0 #f7f5ee,2px 3px 0 #8d806860,7px 14px 18px #443b263b,18px 32px 45px #443b2617;transition:transform 230ms ease}
+.print-paper img{display:block;width:100%;height:100%;object-fit:fill}
+#printLoading{position:absolute;inset:auto 0 0;padding:15px 8px;background:#0a0907cc;color:var(--bone);text-align:center;font:11px/1.5 var(--font-mono)}
+.print-ledge{height:7px;width:80%;position:absolute;left:10%;bottom:22px;background:#ac9b80;box-shadow:0 2px 0 #6c5e49,0 14px 15px #443b263b;border-top:2px solid #f4eee3}
+.print-caption{display:flex;flex-direction:column;align-items:center;gap:7px;padding:13px 12px 24px;font:10px/1.5 var(--font-mono);color:#645b4d}
+.print-caption span:first-child{font:600 16px var(--font-body);color:var(--void)}
+.print-options{padding:28px 30px 24px;min-width:0}
+.print-sizes{display:flex;gap:8px;margin-bottom:26px}
+.print-sizes button{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px;align-items:flex-start;padding:13px 9px;min-height:68px;border-radius:10px;border:1px solid var(--line);background:var(--raised);color:var(--bone);font-size:13px}
+.print-sizes small{font:9px var(--font-mono);color:var(--muted)}
+.print-sizes button[aria-pressed=true]{background:#36b9a218;border-color:var(--copper)}
+.print-segment{display:flex;gap:4px;background:var(--void);padding:4px;border:1px solid var(--line);border-radius:12px}
+.print-segment button{flex:1;min-height:40px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:12px}
+.print-segment button[aria-pressed=true]{background:var(--bone);color:var(--void);font-weight:600}
+.print-note{font-size:11px;color:var(--muted);line-height:1.6;margin:10px 0 22px}
+.print-quality{white-space:pre-line;font:10px/1.7 var(--font-mono);color:var(--muted);margin:22px 0;padding-top:16px;border-top:1px solid var(--line)}
+.print-caution{color:#edb87a}
+.print-checkout-note{font-size:11px;line-height:1.6;margin:16px 0;color:var(--muted)}
+.print-checkout-note b{font-size:12px;font-weight:600;color:var(--bone)}
+.print-checkout-note p{margin-top:5px;max-width:39ch}
+.print-primary,.print-secondary{width:100%;min-height:48px;border-radius:12px;font-size:13px}
+.print-primary{display:flex;justify-content:space-between;align-items:center;border:0;background:var(--copper);color:var(--void);padding:0 18px;font-weight:700}
+.print-primary span{font-size:23px;font-weight:400}
+.print-secondary{margin-top:8px;background:transparent;border:1px solid var(--line);color:var(--bone)}
+#printStatus:empty{display:none}
+#printClose{font-size:28px;font-weight:400}
+.header-actions .print-open{border:1px solid currentColor;padding:0 15px}
+@media(max-width:760px){
+  #printDialog{width:calc(100vw - 16px);max-height:94dvh;border-radius:22px;margin:auto auto 8px}
+  #printDialog .dialog-heading{padding:20px}
+  #printDialog .dialog-heading p:not(.print-kicker){font-size:12px}
+  .print-layout{grid-template-columns:1fr}
+  .print-wall{height:310px;min-height:230px;max-height:42dvh;padding:22px 36px 38px}
+  .print-paper{width:min(100%,calc(min(235px,30dvh) * var(--paper-aspect,.75)))}.print-ledge{bottom:13px}
+  .print-caption{padding:5px 12px 14px;flex-direction:row;justify-content:center;font-size:8px;gap:14px}
+  .print-caption span:first-child{font-size:13px}
+  .print-options{padding:24px 20px}.print-sizes{gap:7px}.print-sizes button{padding:12px}
+  .header-actions .print-open{padding:0;width:44px}
+}
+@media(max-width:480px){.wordmark{gap:5px;font-size:19px}.brand-symbol{font-size:30px}.header-actions{gap:2px}.header-actions .uv-light-button{min-width:48px;padding:0 7px}.header-actions .uv-light-button svg{display:none}}

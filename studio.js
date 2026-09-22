@@ -1,6 +1,7 @@
 /* Studio 137 instrument shell. The drawing engine remains independently usable. */
 (() => {
   'use strict';
+  if(new URLSearchParams(location.search).get('renderer')==='print')return;
   const $ = id => document.getElementById(id);
   const api = () => window.SigilStudio;
   const icons = {

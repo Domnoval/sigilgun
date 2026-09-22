@@ -22,7 +22,7 @@ The drawing remains Canvas 2D; the shell does not add a WebGL dependency.
 
 ## Anatomy
 
-- **Header:** instrument name, UV light, Project, Export.
+- **Header:** instrument name, UV light, Project, Print, Export.
 - **Stage:** a stable document fitted inside a responsive console without side
   handles or grips.
 - **Quick actions:** Undo, Redo, Burst, Help. Compact controls sit below the stage
