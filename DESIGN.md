@@ -7,7 +7,8 @@ should not have to understand the engine to enjoy it.
 
 Michael asked for a simple, tactile, game-console wrapper. This takes the readable
 controls and invitation to play from a handheld console, using Studio X37's own
-colors and hand-drawn symbol library.
+colors and hand-drawn symbol library. The shell has no side handles or grips at
+any viewport; the artwork gets the available stage width.
 
 The brand palette is bone #E8DFCE, void #0A0907, panel #14110C, copper #36B9A2,
 magenta #FF2E7E, phosphor #63D98F, and signal #DF7A1F. Syne carries the interface;
@@ -22,9 +23,10 @@ The drawing remains Canvas 2D; the shell does not add a WebGL dependency.
 ## Anatomy
 
 - **Header:** instrument name, Project, Export.
-- **Stage:** a stable document fitted inside a responsive console.
+- **Stage:** a stable document fitted inside a responsive console without side
+  handles or grips.
 - **Quick actions:** Undo, Redo, Burst, Help. Compact controls sit below the stage
-  on phones, and the side grips disappear.
+  in a footer row on phones, Fold/tablets, and desktop.
 - **Tool dock:** Brush, Symbols, Ink, Structure, Layers.
 - **Drawers:** only the chosen tool's controls are visible. Keyboard focus stays
   inside the open dialog and returns to its trigger when closed.
@@ -41,8 +43,10 @@ studio.css owns the visual shell, focus states and responsive layout.
 studio.js adapts this particular instrument's controls to it. The drawing engine
 exposes window.SigilStudio and emits sigil:change.
 
-For the next instrument, reuse the header/stage/dock/dialog pattern and visual
-tokens. Write a small adapter around that instrument's capabilities. Preserve its
+For the next instrument, reuse the header/stage/quick-action footer/dock/dialog
+pattern and visual tokens. Keep the shell free of side handles by default at
+every screen size, with the artwork as the main event. Write a small adapter
+around that instrument's capabilities. Preserve its
 identity and expose only its essential actions; don't give every instrument a
 brush or a layer panel just for consistency.
 
@@ -57,3 +61,18 @@ This pass does not add the instrument to the live television website.
 4. A pen-pressure option if testing on actual stylus hardware supports it.
 
 These are future work, not controls that pretend to work in this version.
+
+## Brush feedback and optional depth
+
+The pointer carries a translucent, ink-colored footprint sized in document units.
+When one symbol is selected, its silhouette sits inside that footprint. It is
+approximate: scatter and rotation remain part of the brush. Fields that place
+marks away from the pointer use an explicit placement indicator instead.
+Pointer feedback is a DOM overlay, excluded from the document and every export.
+
+Distance-based sampling makes the gesture consistent across device event rates.
+It preserves brush randomness rather than replacing it with a rigid uniform line.
+
+Each layer can cast a shadow onto content beneath it. Shadow is off by default;
+distance, softness and strength are opt-in controls inside Layers. The same
+document settings drive the on-screen composition, project file and exports.

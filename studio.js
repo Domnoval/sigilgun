@@ -27,21 +27,11 @@
   shellHeader.innerHTML = '<a class="wordmark" href="#" aria-label="Sigil Gun home"><span class="brand-symbol" aria-hidden="true">✳</span><span>sigil gun<small>A Studio 137 instrument</small></span></a><div class="header-actions">'+button('projectOpen','Project','menu','quiet-button')+button('exportOpen','Export','export','export-button')+'</div>';
   document.body.prepend(shellHeader);
   shellHeader.querySelector('a').addEventListener('click', e => e.preventDefault());
-  const leftGrip = document.createElement('nav');
-  leftGrip.className = 'grip grip-left';
-  leftGrip.setAttribute('aria-label','History');
-  leftGrip.innerHTML = '<div class="grip-light"></div>'+button('undo','Undo','undo','round-button')+button('redo','Redo','redo','round-button')+'<span class="grip-mark" aria-hidden="true">137</span>';
-  const rightGrip = document.createElement('nav');
-  rightGrip.className = 'grip grip-right';
-  rightGrip.setAttribute('aria-label','Quick play');
-  rightGrip.innerHTML = '<div class="grip-light"></div>'+button('burst','Burst','burst','round-button')+button('helpOpen','Help','help','round-button')+'<span class="grip-ridges" aria-hidden="true"></span>';
   panel.hidden=true;
   document.body.append(panel);
-  wrap.prepend(leftGrip);
-  wrap.append(rightGrip);
   wrap.setAttribute('aria-label','Drawing console');
   wrap.setAttribute('role','main');
-  stage.insertAdjacentHTML('beforeend','<div id="emptyState" class="empty-state"><div class="hero-glyph" aria-hidden="true"></div><h1>Make a little chaos.</h1><p>Drag to paint. Every mark is yours.</p></div><div id="brushCursor" aria-hidden="true"></div>');
+  stage.insertAdjacentHTML('beforeend','<div id="emptyState" class="empty-state"><div class="hero-glyph" aria-hidden="true"></div><h1>Make a little chaos.</h1><p>Drag to paint. Every mark is yours.</p></div><div id="brushCursor" aria-hidden="true"><div class="brush-footprint"></div><div class="brush-outline"></div><div class="brush-mark"></div><div class="brush-center"></div><span class="brush-placement-note">Field placement</span></div>');
   $('cv').setAttribute('aria-label','Drawing canvas. Drag to paint with the selected brush and symbols.');
   const footer = document.createElement('footer');
   footer.className='studio-footer';
@@ -50,7 +40,7 @@
     button('inkOpen','Ink','ink','dock-button')+button('shapeOpen','Structure','shape','dock-button')+
     button('layersOpen','Layers','layers','dock-button')+'</div>'+
     '<div id="resumeStrip" class="resume-strip" hidden><span>Your last session is here.</span>'+button('resumeLast','Resume',null)+button('dismissLast','Start fresh',null)+'</div>'+
-    '<div class="session-line"><span id="shellStatus" role="status">Ready when you are.</span><div class="mobile-history">'+button('undoMobile','Undo','undo')+button('redoMobile','Redo','redo')+button('burstMobile','Burst','burst')+'</div><span id="documentSize"></span></div>';
+    '<div class="session-line"><span id="shellStatus" role="status">Ready when you are.</span><nav class="quick-actions" aria-label="Quick actions">'+button('undo','Undo','undo')+button('redo','Redo','redo')+button('burst','Burst','burst')+button('helpOpen','Help','help')+'</nav><span id="documentSize"></span></div>';
   document.body.append(footer);
   const toast=document.createElement('div'); toast.id='studioToast'; toast.setAttribute('role','status'); document.body.append(toast);
   function notify(message) {
@@ -74,6 +64,7 @@
   function open(id,from){
     if(activeDialog) activeDialog.close();
     if(id==='symbolsDialog')renderSymbols();
+    $('brushCursor').classList.remove('visible');
     returnFocus=from||document.activeElement; activeDialog=$(id); activeDialog.returnFocus=returnFocus;activeDialog.showModal();
     if(from) from.setAttribute('aria-expanded','true');
   }
@@ -116,6 +107,16 @@
   const layerButtons=document.createElement('div');layerButtons.className='layer-actions';layersContent.append(layerButtons);
   ['layAdd','layDel','layUp','layDn'].forEach(id=>take(id,layerButtons));
   take('layList',layersContent);['blendM','collideM'].forEach(id=>moveSlider(id,layersContent));
+  const shadowControls=section(layersContent,'Give this layer some depth');
+  shadowControls.innerHTML+='<label class="shadow-toggle"><input type="checkbox" id="shadowEnabled"> Cast a shadow</label><p class="dim">Light from the upper left. This layer casts onto the artwork below it.</p>'+
+    '<div id="shadowOptions" hidden><div class="slider"><label for="shadowDistance">Distance <output id="shadowDistanceValue">8</output></label><input id="shadowDistance" type="range" min="0" max="60" value="8"></div>'+
+    '<div class="slider"><label for="shadowBlur">Softness <output id="shadowBlurValue">16</output></label><input id="shadowBlur" type="range" min="0" max="80" value="16"></div>'+
+    '<div class="slider"><label for="shadowOpacity">Strength <output id="shadowOpacityValue">30%</output></label><input id="shadowOpacity" type="range" min="0" max="100" value="30"></div></div>';
+  $('shadowEnabled').addEventListener('change',e=>api()?.setLayerShadow({enabled:e.target.checked}));
+  for(const[id,key,factor]of [['shadowDistance','distance',1],['shadowBlur','blur',1],['shadowOpacity','opacity',.01]]){
+    $(id).addEventListener('input',e=>api()?.setLayerShadow({[key]:Number(e.target.value)*factor},{defer:true}));
+    $(id).addEventListener('change',e=>api()?.setLayerShadow({[key]:Number(e.target.value)*factor}));
+  }
   const exportContent=dialog('exportDialog','Take it with you.','An image to share. A vector to build with. A project to keep exploring.');
   moveSlider('expK',exportContent);
   ['btnExport','btnSVG','btnSave'].forEach(id=>take(id,exportContent));
@@ -134,9 +135,9 @@
   ['brush','symbols','ink','shape','layers','project','export','help'].forEach(name=>trigger(name+'Open',name+'Dialog'));
   function doUndo(){api()?.undo();}
   function doRedo(){api()?.redo();}
-  $('undo').onclick=$('undoMobile').onclick=doUndo;$('redo').onclick=$('redoMobile').onclick=doRedo;
+  $('undo').onclick=doUndo;$('redo').onclick=doRedo;
   function burst(){ $('btnAuto').click(); notify('A little chaos. Undo takes it back.'); }
-  $('burst').onclick=$('burstMobile').onclick=burst;
+  $('burst').onclick=burst;
   $('shellSave').onclick=()=>api()?.save();
   $('shellLoad').onclick=()=>$('fileIn').click();
   $('shellClear').onclick=()=>{api()?.clear();$('projectDialog').close();notify('Canvas cleared. You can undo this.');};
@@ -154,6 +155,7 @@
     const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',sym.d);path.setAttribute('fill','currentColor');svg.append(path);return svg;
   };
   const library=window.SIGIL_LIB;
+  const symbolsByName=new Map(library.map(symbol=>[symbol.n,symbol]));
   const hero=library.find(s=>s.n==='pink_tight-spiral')||library[0];
   document.querySelector('.hero-glyph').append(glyphSVG(hero));
   let selected=null;
@@ -204,8 +206,8 @@
     const settings=state.settings||{};
     const hasArtwork=state.hasArtwork??state.stamps>0;
     $('emptyState').hidden=hasArtwork;
-    $('undo').disabled=$('undoMobile').disabled=!state.canUndo;
-    $('redo').disabled=$('redoMobile').disabled=!state.canRedo;
+    $('undo').disabled=!state.canUndo;
+    $('redo').disabled=!state.canRedo;
     $('documentSize').textContent=state.width+' × '+state.height;
     const layerCount=Array.isArray(state.layers)?state.layers.length:state.layers;
     $('shellStatus').textContent=hasArtwork?(state.stamps+' marks · '+layerCount+' layer'+(layerCount===1?'':'s')):'Drag to paint. Or try a burst.';
@@ -217,19 +219,64 @@
     if(settings.ink)$('shellInk').value=settings.ink;
     if(settings.bg)$('shellBackground').value=settings.bg;
     if(state.selectedSymbol!==undefined&&selected!==state.selectedSymbol){selected=state.selectedSymbol;renderSymbols();}
+    const layer=Array.isArray(state.layers)?state.layers[state.activeLayer]:null;
+    const shadow=layer?.shadow||{enabled:false,distance:8,blur:16,opacity:.3};
+    $('shadowEnabled').checked=shadow.enabled;$('shadowOptions').hidden=!shadow.enabled;
+    for(const[id,value,suffix]of [['shadowDistance',shadow.distance,''],['shadowBlur',shadow.blur,''],['shadowOpacity',Math.round(shadow.opacity*100),'%']]){
+      $(id).value=value;$(id+'Value').textContent=value+suffix;
+    }
     document.querySelectorAll('#brushes .brush').forEach(el=>el.setAttribute('aria-pressed',String(el.classList.contains('active'))));
     document.querySelectorAll('#lensChips .chip').forEach(el=>el.setAttribute('aria-pressed',String(el.classList.contains('active'))));
     if(hasArtwork)$('resumeStrip').hidden=true;
+    updateBrushPreview(state);
   }
   window.addEventListener('sigil:change',e=>sync(e.detail));
   const cursor=$('brushCursor');
-  stage.addEventListener('pointermove',e=>{
-    if(e.pointerType==='touch')return;
-    const r=stage.getBoundingClientRect();cursor.style.transform='translate('+(e.clientX-r.left)+'px,'+(e.clientY-r.top)+'px)';cursor.classList.add('visible');
-  });
-  stage.addEventListener('pointerleave',()=>cursor.classList.remove('visible'));
+  const cursorMark=cursor.querySelector('.brush-mark');
+  let pointerPreview=null,previewSymbol=null,previewAngle=0;
+  function updateBrushPreview(state=api()?.getState()){
+    if(!state||!pointerPreview)return;
+    const bounds=$('cv').getBoundingClientRect(),r=stage.getBoundingClientRect();
+    const{x,y}=pointerPreview;
+    if(activeDialog||x<bounds.left||x>bounds.right||y<bounds.top||y>bounds.bottom){cursor.classList.remove('visible');return;}
+    const settings=state.settings,screenScale=bounds.width/state.width;
+    const brush=api()?.getBrushPreview?.();
+    const followsPointer=brush?.followsPointer??settings.field==='off';
+    const size=settings.scale*screenScale;
+    const reach=followsPointer?(brush?.reach??settings.scale):10/screenScale;
+    const diameter=Math.max(8,reach*2*screenScale);
+    cursor.style.transform='translate('+(x-r.left)+'px,'+(y-r.top)+'px)';
+    cursor.style.setProperty('--footprint-size',diameter+'px');
+    cursor.style.setProperty('--mark-size',size+'px');
+    cursor.style.setProperty('--ink-preview',settings.ink);
+    cursor.style.setProperty('--preview-strength',Math.max(.045,settings.op*.16));
+    cursor.style.setProperty('--mark-angle',(settings.brush==='calligraphy'?previewAngle+Math.PI/2:0)+'rad');
+    cursor.dataset.brush=settings.brush;cursor.dataset.placement=followsPointer?'pointer':'field';
+    const name=state.selectedSymbol||null;
+    if(name!==previewSymbol){
+      previewSymbol=name;cursorMark.replaceChildren();
+      if(name&&symbolsByName.has(name))cursorMark.append(glyphSVG(symbolsByName.get(name)));
+    }
+    cursor.dataset.symbol=name||'';
+    cursor.classList.add('visible');
+  }
+  function trackPointer(e){
+    if(e.pointerType==='touch'&&!e.buttons){pointerPreview=null;cursor.classList.remove('visible');return;}
+    if(pointerPreview){
+      const dx=e.clientX-pointerPreview.x,dy=e.clientY-pointerPreview.y;
+      if(Math.hypot(dx,dy)>2)previewAngle=Math.atan2(dy,dx);
+    }
+    pointerPreview={x:e.clientX,y:e.clientY,type:e.pointerType};updateBrushPreview();
+  }
+  stage.addEventListener('pointermove',trackPointer);
+  stage.addEventListener('pointerdown',trackPointer);
+  stage.addEventListener('pointerleave',()=>{pointerPreview=null;cursor.classList.remove('visible');});
+  window.addEventListener('pointerup',e=>{if(e.pointerType==='touch'){pointerPreview=null;cursor.classList.remove('visible');}});
+  window.addEventListener('pointercancel',()=>{pointerPreview=null;cursor.classList.remove('visible');});
+  window.addEventListener('blur',()=>{pointerPreview=null;cursor.classList.remove('visible');});
+  window.addEventListener('resize',()=>updateBrushPreview());
   // Small physical response belongs to the controls, never to the artwork.
-  document.querySelectorAll('.round-button,.dock-button').forEach(b=>{
+  document.querySelectorAll('.dock-button').forEach(b=>{
     b.addEventListener('pointermove',e=>{if(e.pointerType!=='mouse'||matchMedia('(prefers-reduced-motion: reduce)').matches)return;const r=b.getBoundingClientRect();b.style.setProperty('--tilt',((e.clientX-r.left)/r.width-.5)*8+'deg');});
     b.addEventListener('pointerleave',()=>b.style.removeProperty('--tilt'));
   });

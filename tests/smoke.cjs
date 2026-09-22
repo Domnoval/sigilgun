@@ -143,6 +143,17 @@ async function drawAt(page, xFraction, yFraction = 0.5, touch = false) {
   await page.waitForTimeout(60);
 }
 
+async function drawStraightPath(page, moveEvents) {
+  const box = await page.locator('#cv').boundingBox();
+  assert(box && box.width > 20 && box.height > 20, 'canvas must have a usable hit area');
+  const y = box.y + box.height * 0.5;
+  await page.mouse.move(box.x + box.width * 0.18, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.82, y, { steps: moveEvents });
+  await page.mouse.up();
+  await page.waitForTimeout(60);
+}
+
 async function canvasPixels(page) {
   return page.locator('#cv').evaluate(canvas => {
     const context = canvas.getContext('2d');
@@ -202,6 +213,18 @@ async function download(page, selector) {
   return value;
 }
 
+async function apiDownload(page, method, ...args) {
+  const pending = page.waitForEvent('download');
+  await page.evaluate(({ name, values }) => window.SigilStudio[name](...values), {
+    name: method,
+    values: args,
+  });
+  const result = await pending;
+  const file = await result.path();
+  assert(file, `download ${result.suggestedFilename()} has no local path`);
+  return { name: result.suggestedFilename(), buffer: fs.readFileSync(file) };
+}
+
 async function loadProject(page, project, filename = 'fixture.sigil.json') {
   await page.locator('#fileIn').setInputFiles({
     name: filename,
@@ -219,7 +242,7 @@ async function parseSvg(page, buffer) {
     const layerNames = [...documentNode.querySelectorAll('g[data-layer]')].map(node =>
       node.getAttribute('data-layer'),
     );
-    const translations = [...documentNode.querySelectorAll('g[data-layer] > g[transform]')]
+    const translations = [...documentNode.querySelectorAll('g[id^="layer-art-"] > g[transform]')]
       .map(node => node.getAttribute('transform') || '')
       .map(value => value.match(/translate\(\s*(-?[\d.]+)/))
       .filter(Boolean)
@@ -232,6 +255,9 @@ async function parseSvg(page, buffer) {
       translations,
       images: documentNode.querySelectorAll('image').length,
       paths: documentNode.querySelectorAll('path').length,
+      filters: [...documentNode.querySelectorAll('filter')].map(node => node.id),
+      filterUses: [...documentNode.querySelectorAll('use[filter]')]
+        .map(node => node.getAttribute('filter')),
     };
   }, buffer.toString('utf8'));
 }
@@ -300,6 +326,104 @@ test("typing 'c' in a text input does not clear the canvas", () =>
     const after = await canvasPixels(page);
     assert(after.teal[0] >= before.teal[0] * 0.8, 'the canvas clear shortcut fired inside an input');
     await closeDialog(page, '#symbolsDialog');
+  }));
+
+test('a straight stroke is independent of pointer event rate', async () => {
+  async function capture(moveEvents) {
+    return withApp(async page => {
+      await page.evaluate(() => {
+        const options = {
+          brush: 'finetip', showGrid: false, collide: 'off', scale: 42, brushR: 70,
+          dens: 9, gap: 0, chaos: 0, rays: false, noRepeat: false,
+        };
+        for (const [key, value] of Object.entries(options)) window.SigilStudio.setOption(key, value);
+        window.SigilStudio.selectSymbol(window.SIGIL_LIB[0].n);
+      });
+      await drawStraightPath(page, moveEvents);
+      return page.evaluate(() => window.SigilStudio.getProject());
+    });
+  }
+
+  const sparse = await capture(5);
+  const dense = await capture(50);
+  assert(sparse.stamps.length > 3, 'stroke fixture did not create enough marks');
+  assert.equal(dense.stamps.length, sparse.stamps.length, 'event rate changed the mark count');
+  assert.equal(dense.rngState, sparse.rngState, 'event rate consumed a different random sequence');
+  for (let index = 0; index < sparse.stamps.length; index++) {
+    const a = sparse.stamps[index];
+    const b = dense.stamps[index];
+    assert.equal(b.n, a.n, `mark ${index} changed symbol`);
+    assert(Math.abs(b.x - a.x) < 0.1, `mark ${index} drifted horizontally`);
+    assert(Math.abs(b.y - a.y) < 0.1, `mark ${index} drifted vertically`);
+    assert(Math.abs(b.s - a.s) < 0.0001, `mark ${index} changed size`);
+  }
+});
+
+test('brush footprint previews scale, scatter, ink and the selected mark without entering exports', () =>
+  withApp(async page => {
+    await prepareCanvas(page);
+    const canvasBox = await page.locator('#cv').boundingBox();
+    assert(canvasBox, 'canvas has no pointer target');
+    await page.mouse.move(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.5);
+
+    const cursor = page.locator('#brushCursor');
+    await poll(
+      async () => cursor.evaluate(element => element.classList.contains('visible')),
+      'brush footprint did not appear over the canvas',
+    );
+    const readPreview = () => cursor.evaluate(element => ({
+      footprint: parseFloat(element.style.getPropertyValue('--footprint-size')),
+      mark: parseFloat(element.style.getPropertyValue('--mark-size')),
+      ink: element.style.getPropertyValue('--ink-preview').trim().toLowerCase(),
+      symbol: element.dataset.symbol || '',
+      glyphs: element.querySelectorAll('.brush-mark svg').length,
+    }));
+    const generic = await readPreview();
+    assert(generic.footprint > 8, 'generic brush footprint has no useful size');
+    assert(generic.mark > 4, 'generic brush mark has no useful size');
+    assert.equal(generic.symbol, '', 'generic brush unexpectedly previews a selected symbol');
+    assert.equal(generic.glyphs, 0, 'generic brush should use its brush silhouette');
+
+    await page.evaluate(() => window.SigilStudio.setOption('scale', 120));
+    const scaled = await poll(async () => {
+      const value = await readPreview();
+      return value.mark > generic.mark * 1.8 ? value : null;
+    }, 'brush mark preview did not respond to scale');
+
+    await page.evaluate(() => window.SigilStudio.setOption('brushR', 180));
+    const scattered = await poll(async () => {
+      const value = await readPreview();
+      return value.footprint > scaled.footprint * 1.25 ? value : null;
+    }, 'brush footprint did not respond to scatter radius');
+    assert(scattered.footprint > scattered.mark, 'scatter footprint collapsed onto the mark preview');
+
+    await page.evaluate(() => window.SigilStudio.setOption('ink', '#ff35bb'));
+    await poll(
+      async () => (await readPreview()).ink === '#ff35bb',
+      'brush preview did not adopt the current ink',
+    );
+
+    const selected = await page.evaluate(() => {
+      const name = window.SIGIL_LIB[0].n;
+      window.SigilStudio.selectSymbol(name);
+      return name;
+    });
+    await poll(async () => {
+      const value = await readPreview();
+      return value.symbol === selected && value.glyphs === 1 ? value : null;
+    }, 'selected symbol did not replace the generic brush silhouette');
+
+    const visibleSvg = await page.evaluate(() => window.SigilStudio.getSVG());
+    const visiblePng = await decodePng(page, (await apiDownload(page, 'exportPNG', 1)).buffer);
+    await page.mouse.move(1, 1);
+    await poll(
+      async () => cursor.evaluate(element => !element.classList.contains('visible')),
+      'brush footprint did not leave with the pointer',
+    );
+    const hiddenSvg = await page.evaluate(() => window.SigilStudio.getSVG());
+    const hiddenPng = await decodePng(page, (await apiDownload(page, 'exportPNG', 1)).buffer);
+    assert.equal(hiddenSvg, visibleSvg, 'SVG export included the live brush footprint');
+    assert.deepEqual(hiddenPng, visiblePng, 'PNG export included the live brush footprint');
   }));
 
 test('vector project save/load keeps old and new marks in PNG and SVG exports', () =>
@@ -424,22 +548,161 @@ test('layer clear, visibility, reorder and delete affect the real exports', () =
     await closeDialog(page, '#layersDialog');
     await waitForPixels(page, pixels => pixels.teal[2]);
     await openDialog(page, '#layersOpen', '#layersDialog');
-    await page.locator('#layUp').click();
-    const upOrder = await page.locator('.layer-row .ly-name').evaluateAll(inputs =>
+    await page.locator('#layDn').click();
+    const displayOrder = await page.locator('.layer-row .ly-name').evaluateAll(inputs =>
       inputs.map(input => input.value),
     );
-    assert.deepEqual(upOrder, ['Top', 'Base']);
+    assert.deepEqual(displayOrder, ['Base', 'Top'], 'top-first layer list did not reflect send backward');
     await closeDialog(page, '#layersDialog');
     const reordered = await parseSvg(page, (await download(page, '#btnSVG')).buffer);
     assert.deepEqual(reordered.layerNames.slice(0, 2), ['Top', 'Base']);
 
     await openDialog(page, '#layersOpen', '#layersDialog');
-    await page.locator('#layDn').click();
+    await page.locator('#layUp').click();
     await page.locator('#layDel').click();
     assert.equal(await page.locator('.layer-row').count(), 1, 'delete did not remove Top');
     await closeDialog(page, '#layersDialog');
     await poll(async () => (await canvasPixels(page)).teal[2] < 10, 'deleted Top stayed visible');
     assert((await canvasPixels(page)).teal[0] > 15, 'deleting Top damaged Base');
+  }));
+
+test('optional layer shadow renders, persists, follows history and vanishes with a hidden layer', () =>
+  withApp(async page => {
+    await prepareCanvas(page);
+    await page.evaluate(() => {
+      const options = {
+        bg: '#efe9dc', brush: 'finetip', scale: 112, brushR: 8, dens: 2,
+        gap: 0, chaos: 0, rays: false, tex: 'flat', field: 'off',
+      };
+      for (const [key, value] of Object.entries(options)) window.SigilStudio.setOption(key, value);
+      window.SigilStudio.selectSymbol(window.SIGIL_LIB[0].n);
+    });
+    await drawAt(page, 0.5, 0.5);
+    await poll(
+      async () => (await page.evaluate(() => window.SigilStudio.getState())).stamps > 0,
+      'shadow fixture did not create artwork',
+    );
+
+    const defaultShadow = await page.evaluate(() => window.SigilStudio.getState().layers[0].shadow);
+    assert.deepEqual(defaultShadow, { enabled: false, distance: 8, blur: 16, opacity: 0.3 });
+    await page.locator('#cv').evaluate(canvas => {
+      window.__shadowBaseline = new Uint8ClampedArray(
+        canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data,
+      );
+    });
+
+    await openDialog(page, '#layersOpen', '#layersDialog');
+    assert.equal(await page.locator('#shadowEnabled').isChecked(), false);
+    assert.equal(await page.locator('#shadowOptions').evaluate(element => element.hidden), true);
+    await page.locator('#shadowEnabled').check();
+    await poll(
+      async () => (await page.evaluate(() => window.SigilStudio.getState())).layers[0].shadow.enabled,
+      'shadow checkbox did not update the active layer',
+    );
+    assert.equal(await page.locator('#shadowOptions').evaluate(element => element.hidden), false);
+    await closeDialog(page, '#layersDialog');
+
+    await page.evaluate(() => window.SigilStudio.undo());
+    assert.equal(
+      (await page.evaluate(() => window.SigilStudio.getState())).layers[0].shadow.enabled,
+      false,
+      'undo did not remove the shadow toggle',
+    );
+    await page.evaluate(() => window.SigilStudio.redo());
+    assert.equal(
+      (await page.evaluate(() => window.SigilStudio.getState())).layers[0].shadow.enabled,
+      true,
+      'redo did not restore the shadow toggle',
+    );
+
+    await page.evaluate(() => window.SigilStudio.setLayerShadow({
+      enabled: true, distance: 48, blur: 18, opacity: 0.75,
+    }));
+    const configured = await page.evaluate(() => window.SigilStudio.getState().layers[0].shadow);
+    assert.deepEqual(configured, { enabled: true, distance: 48, blur: 18, opacity: 0.75 });
+    await openDialog(page, '#layersOpen', '#layersDialog');
+    assert.equal(await page.locator('#shadowDistance').inputValue(), '48');
+    assert.equal(await page.locator('#shadowBlur').inputValue(), '18');
+    assert.equal(await page.locator('#shadowOpacity').inputValue(), '75');
+    await closeDialog(page, '#layersDialog');
+
+    const screenShadow = await page.locator('#cv').evaluate(canvas => {
+      const before = window.__shadowBaseline;
+      const { width, height } = canvas;
+      const now = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+      let darkerBelow = 0;
+      for (let y = Math.floor(height * 0.5); y < height; y += 2) {
+        for (let x = 0; x < width; x += 2) {
+          const offset = (y * width + x) * 4;
+          const beforeLight = before[offset] + before[offset + 1] + before[offset + 2];
+          const nowLight = now[offset] + now[offset + 1] + now[offset + 2];
+          if (beforeLight - nowLight > 12) darkerBelow++;
+        }
+      }
+      return darkerBelow;
+    });
+    assert(screenShadow > 20, 'enabled shadow did not darken pixels below the artwork');
+
+    const shadowSvg = await parseSvg(
+      page,
+      Buffer.from(await page.evaluate(() => window.SigilStudio.getSVG())),
+    );
+    const shadowFilter = shadowSvg.filters.find(id => id.startsWith('layer-shadow-'));
+    assert(shadowFilter, 'SVG export omitted the layer shadow filter');
+    assert(
+      shadowSvg.filterUses.includes(`url(#${shadowFilter})`),
+      'SVG artwork does not reference its layer shadow filter',
+    );
+
+    await page.evaluate(() => window.SigilStudio.undo());
+    assert.deepEqual(
+      (await page.evaluate(() => window.SigilStudio.getState())).layers[0].shadow,
+      { enabled: true, distance: 8, blur: 16, opacity: 0.3 },
+      'undo did not restore the prior shadow settings',
+    );
+    await page.evaluate(() => window.SigilStudio.redo());
+    assert.deepEqual(
+      (await page.evaluate(() => window.SigilStudio.getState())).layers[0].shadow,
+      configured,
+      'redo did not restore the configured shadow',
+    );
+
+    const saved = await download(page, '#btnSave');
+    const project = JSON.parse(saved.buffer.toString('utf8'));
+    assert.deepEqual(project.layers[0].shadow, configured, 'project save omitted the layer shadow');
+    await page.evaluate(() => window.SigilStudio.setLayerShadow({ enabled: false }));
+    await loadProject(page, project, saved.name);
+    await poll(async () => {
+      const state = await page.evaluate(() => window.SigilStudio.getState());
+      return !state.busy && state.layers[0].shadow.distance === 48 ? state : null;
+    }, 'project load did not restore the saved shadow');
+    assert.deepEqual(
+      (await page.evaluate(() => window.SigilStudio.getState())).layers[0].shadow,
+      configured,
+    );
+
+    await openDialog(page, '#layersOpen', '#layersDialog');
+    await page.locator('.layer-row.active .ly-eye').uncheck();
+    await closeDialog(page, '#layersDialog');
+    const hiddenSvg = await parseSvg(
+      page,
+      Buffer.from(await page.evaluate(() => window.SigilStudio.getSVG())),
+    );
+    assert.equal(hiddenSvg.layerNames.length, 0, 'hidden layer stayed in the SVG');
+    assert.equal(hiddenSvg.filters.length, 0, 'hidden layer still cast an SVG shadow');
+    const hiddenPixels = await page.locator('#cv').evaluate(canvas => {
+      const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+      let nonBackground = 0;
+      for (let offset = 0; offset < data.length; offset += 16) {
+        if (
+          Math.abs(data[offset] - 239) +
+          Math.abs(data[offset + 1] - 233) +
+          Math.abs(data[offset + 2] - 220) > 3
+        ) nonBackground++;
+      }
+      return nonBackground;
+    });
+    assert.equal(hiddenPixels, 0, 'hidden layer still left artwork or shadow pixels on the canvas');
   }));
 
 test('undo and redo restore a completed pointer stroke', () =>
@@ -514,9 +777,12 @@ test('mobile opens with a full-width stage and accepts a real touch pointer', ()
   withApp(async page => {
     const layout = await page.evaluate(() => {
       const stage = document.querySelector('#stage').getBoundingClientRect();
+      const quickActions = document.querySelector('.quick-actions').getBoundingClientRect();
       return {
         viewport: document.documentElement.clientWidth,
+        documentWidth: document.documentElement.scrollWidth,
         stageWidth: stage.width,
+        quickActions: { left: quickActions.left, right: quickActions.right, width: quickActions.width },
         openDialogs: document.querySelectorAll('dialog[open]').length,
         toolsVisible: !!document.querySelector('.play-dock')?.getClientRects().length,
         expandedControls: [...document.querySelectorAll('[aria-haspopup="dialog"]')]
@@ -530,6 +796,41 @@ test('mobile opens with a full-width stage and accepts a real touch pointer', ()
       layout.stageWidth >= layout.viewport * 0.8,
       `mobile canvas is only ${layout.stageWidth}px of ${layout.viewport}px`,
     );
+    assert(layout.documentWidth <= layout.viewport + 1, 'mobile shell overflows horizontally');
+    assert(
+      layout.quickActions.left >= 0 && layout.quickActions.right <= layout.viewport,
+      'mobile quick actions are clipped off-screen',
+    );
+
+    await openDialog(page, '#layersOpen', '#layersDialog');
+    await page.locator('#shadowEnabled').check();
+    const shadowLayout = await page.evaluate(() => {
+      const dialog = document.querySelector('#layersDialog');
+      const range = document.querySelector('#shadowOpacity').getBoundingClientRect();
+      const bounds = dialog.getBoundingClientRect();
+      return {
+        dialogLeft: bounds.left,
+        dialogRight: bounds.right,
+        dialogWidth: bounds.width,
+        dialogScrollWidth: dialog.scrollWidth,
+        rangeLeft: range.left,
+        rangeRight: range.right,
+      };
+    });
+    assert(
+      shadowLayout.dialogLeft >= 0 && shadowLayout.dialogRight <= layout.viewport + 1,
+      'mobile shadow dialog is clipped off-screen',
+    );
+    assert(
+      shadowLayout.dialogScrollWidth <= shadowLayout.dialogWidth + 1,
+      'mobile shadow dialog scrolls horizontally',
+    );
+    assert(
+      shadowLayout.rangeLeft >= shadowLayout.dialogLeft &&
+      shadowLayout.rangeRight <= shadowLayout.dialogRight + 1,
+      'mobile shadow control extends outside its dialog',
+    );
+    await closeDialog(page, '#layersDialog');
 
     await prepareCanvas(page);
     await drawAt(page, 0.5, 0.5, true);

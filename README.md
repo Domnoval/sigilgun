@@ -21,6 +21,8 @@ The Node dependencies are only for development tests.
 - **Ink** changes future marks and the background without deleting existing work.
 - **Structure** exposes artist systems, placement fields and repeatable seeds.
 - **Layers** separates, hides, blends, reorders or clears parts of the composition.
+  Each layer can optionally cast a shadow, with distance, softness and strength.
+  Shadows default off and are included in project saves, PNG and SVG exports.
 - **Burst** generates a composition with the current settings. Undo takes it back.
 - **Project** saves/opens projects, resumes a browser session and starts a new canvas.
 - **Export** downloads PNG, SVG or an editable project.
@@ -60,6 +62,19 @@ Ctrl/Command Z: Undo. Ctrl/Command Shift Z or Ctrl Y: Redo.
 S: Save project. L: Open project. E: PNG. V: SVG. A: Burst. C: Clear (undoable).
 Drawing shortcuts are disabled while typing in inputs, selects and editable text.
 All dialogs support Escape and return focus to their opener.
+
+## Brush feel
+
+A translucent footprint follows the mouse or hovering pen, matching brush reach,
+mark size and ink. A single selected symbol appears inside it. On touch screens the
+preview appears during contact. Scatter and randomized rotation still vary each
+actual mark; the footprint indicates approximate reach, not an exact next stamp.
+Geometry fields show a placement indicator instead, since they choose their own
+positions. The preview is an interface overlay and never enters artwork exports.
+
+Stroke sampling follows distance traveled, rather than the number of pointer
+events sent by a device. Slow and fast movement along the same path therefore
+produce consistent spacing while preserving the selected scatter and Chaos.
 
 ## Development checks
 
