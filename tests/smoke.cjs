@@ -1183,6 +1183,29 @@ test('print room preview and full-size PNG preserve the same paper composition',
     );
   }));
 
+test('extreme-aspect crop cannot silently export a low-detail print', () =>
+  withApp(async page => {
+    await prepareCanvas(page);
+    await drawAt(page, 0.5);
+    await page.evaluate(async () => {
+      const p = window.SigilStudio.getProject();
+      p.width = 100; p.height = 4000;
+      p.stamps.forEach(stamp => { stamp.x = 50; stamp.y = 2000; stamp.s = 30; });
+      await window.SigilStudio.load(p);
+    });
+    const first = await openPrintRoom(page);
+    assert(await page.locator('#printDownload').isEnabled(), 'whole artwork should remain printable');
+    await page.locator('#printFill').click();
+    const crop = await waitForPrintPreview(page, first.src);
+    assert((await page.evaluate(() => window.PrintRoom.getPlan().output.dpi)) < 150);
+    assert.equal(await page.locator('#printDownload').isEnabled(), false, 'unsafe crop download is enabled');
+    assert.match(await page.locator('#printQuality').textContent(), /Choose Whole artwork/);
+    await page.locator('#printFit').click();
+    await waitForPrintPreview(page, crop.src);
+    assert(await page.locator('#printDownload').isEnabled(), 'safe fit did not restore print export');
+    await page.locator('#printClose').click();
+  }));
+
 test('print room controls fit folded and unfolded touch layouts', async () => {
   for (const viewport of [{ width: 480, height: 1080 }, { width: 912, height: 912 }]) {
     await withApp(async page => {

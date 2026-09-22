@@ -108,7 +108,9 @@ New vector artwork gets three suggested paper sizes. Imported raster artwork get
 up to three smaller choices based on a 150-PPI detail floor; if none meet it, the
 smallest option remains available with a warning. Enlarging a bitmap does not add
 detail. Rendered output is up to 300 PPI, bounded by 40 megapixels and 8,000 pixels
-per edge. The file name and print plan state its dimensions and resolution.
+per edge. If an extreme crop would push output below 150 PPI, download is blocked
+with a prompt to use whole-artwork fit or smaller paper. The file name and print
+plan state dimensions and resolution.
 
 Save print file downloads a PNG rendered by the same engine without guides, wall
 or editor. Save print plan downloads the captured editable project plus paper,

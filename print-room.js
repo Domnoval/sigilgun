@@ -40,7 +40,7 @@
   $('exportOpen').before(launcher);
   const d=document.createElement('dialog');d.id='printDialog';d.className='studio-dialog print-room';d.setAttribute('aria-labelledby','printTitle');
   d.innerHTML=`<header class="dialog-heading"><div><p class="print-kicker">FROM YOUR HANDS. INTO THE WORLD.</p><h2 id="printTitle">Give it a wall.</h2><p>The marks you made. A little more permanent.</p></div><button type="button" id="printClose" class="close-button" aria-label="Back to drawing">×</button></header>
-  <div class="print-layout"><section class="print-scene" aria-label="Print preview"><div class="print-wall"><div id="printPaper" class="print-paper"><img id="printPreview" alt="Your composition on the selected paper" hidden><span id="printLoading" role="status">Hanging your artwork…</span></div><div class="print-ledge" aria-hidden="true"></div></div><p class="print-caption"><span id="printDimensions"></span><span>Unframed · wall for scale only</span></p></section>
+  <div class="print-layout"><section class="print-scene" aria-label="Print preview"><div class="print-wall"><div id="printPaper" class="print-paper"><img id="printPreview" alt="Your composition on the selected paper" hidden><span id="printLoading" role="status">Hanging your artwork…</span></div><div class="print-ledge" aria-hidden="true"></div></div><p class="print-caption"><span id="printDimensions"></span><span>Unframed · room illustration</span></p></section>
   <section class="print-options" aria-label="Print options"><p class="print-kicker">01 / MAKE SOME ROOM</p><div id="printSizes" class="print-sizes" role="group" aria-label="Paper size"></div>
   <p class="print-kicker">02 / CHOOSE THE LIGHT</p><div class="print-segment" role="group" aria-label="Print appearance"><button type="button" id="printDay">Daylight</button><button type="button" id="printUV">UV look</button></div><p id="printUVNote" class="print-note">Printed colors on matte paper. No reactive ink.</p>
   <p class="print-kicker">03 / FIND THE FIT</p><div class="print-segment" role="group" aria-label="Paper fit"><button type="button" id="printFit">Whole artwork</button><button type="button" id="printFill">Fill paper</button></div><p id="printFitNote" class="print-note"></p>
@@ -66,11 +66,11 @@
     $('printFitNote').textContent=matching?'Your composition fits this paper edge to edge.':fit==='contain'?'Every mark stays. White margins fill the remaining paper.':'Centered crop. Marks beyond the paper edges are left out.';
     $('printUVNote').textContent=uv?'This saves the glow as printed color. The paper itself will not react to blacklight.':'Printed colors on matte paper. No reactive ink.';
     const detail=output.rasterPPI===null?'Vector marks render fresh at this size.':'Imported image detail: '+output.rasterPPI+' pixels per inch.'+(output.rasterPPI<150?' Choose a smaller print; enlarging cannot restore missing detail.':'');
-    $('printQuality').textContent=output.width.toLocaleString()+' × '+output.height.toLocaleString()+' px · '+output.dpi+' ppi\n'+detail;
-    $('printQuality').classList.toggle('print-caution',output.rasterPPI!==null&&output.rasterPPI<150);
+    $('printQuality').textContent=output.width.toLocaleString()+' × '+output.height.toLocaleString()+' px · '+output.dpi+' ppi\n'+(output.dpi<150?'This crop would lose print detail. Choose Whole artwork or a smaller paper size.':detail);
+    $('printQuality').classList.toggle('print-caution',output.dpi<150||(output.rasterPPI!==null&&output.rasterPPI<150));
     $('printSizes').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.size===size.id)));
     d.querySelectorAll('.print-options button').forEach(b=>b.disabled=exporting||!ready);
-    $('printDownload').disabled=exporting||!ready||!previewReady;
+    $('printDownload').disabled=exporting||!ready||!previewReady||output.dpi<150;
   }
   async function preview(){
     if(!renderer||!ready)return;
@@ -78,7 +78,7 @@
     $('printStatus').textContent='';
     try{
       renderer.setOption('uvLight',uv);
-      const scale=900/Math.max(size.width,size.height),blob=await renderer.renderPrintPNG({width:Math.round(size.width*scale),height:Math.round(size.height*scale),fit});
+      const scale=Math.min(900/Math.max(size.width,size.height),outputFor(source,size,fit).dpi),blob=await renderer.renderPrintPNG({width:Math.round(size.width*scale),height:Math.round(size.height*scale),fit});
       if(ticket!==renderVersion||owner!==session)return;
       const next=URL.createObjectURL(blob),previous=previewUrl;previewUrl=next;$('printPreview').src=next;$('printPreview').hidden=false;$('printLoading').hidden=true;previewReady=true;updateControls();
       if(previous)URL.revokeObjectURL(previous);
@@ -114,7 +114,7 @@
   $('printDay').onclick=()=>{uv=false;preview();};$('printUV').onclick=()=>{uv=true;preview();};
   $('printFit').onclick=()=>{fit='contain';preview();};$('printFill').onclick=()=>{fit='cover';preview();};
   $('printDownload').onclick=async()=>{
-    if(!ready||exporting)return;exporting=true;const owner=session;updateControls();$('printStatus').textContent='Rendering your full-size file. Larger pieces take a moment…';
+    if(!ready||exporting||outputFor(source,size,fit).dpi<150)return;exporting=true;const owner=session;updateControls();$('printStatus').textContent='Rendering your full-size file. Larger pieces take a moment…';
     // Yield a frame so the progress message paints before rendering begins.
     await new Promise(resolve=>requestAnimationFrame(()=>setTimeout(resolve,0)));
     if(owner!==session)return;
