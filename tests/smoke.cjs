@@ -154,6 +154,17 @@ async function drawStraightPath(page, moveEvents) {
   await page.waitForTimeout(60);
 }
 
+async function tapAt(page, xFraction, yFraction = 0.5) {
+  const box = await page.locator('#cv').boundingBox();
+  assert(box && box.width > 20 && box.height > 20, 'canvas must have a usable hit area');
+  const x = box.x + box.width * xFraction;
+  const y = box.y + box.height * yFraction;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(60);
+}
+
 async function canvasPixels(page) {
   return page.locator('#cv').evaluate(canvas => {
     const context = canvas.getContext('2d');
@@ -258,6 +269,10 @@ async function parseSvg(page, buffer) {
       filters: [...documentNode.querySelectorAll('filter')].map(node => node.id),
       filterUses: [...documentNode.querySelectorAll('use[filter]')]
         .map(node => node.getAttribute('filter')),
+      uvMarks: [...documentNode.querySelectorAll('g[data-uv-ink]')].map(node => ({
+        reactive: node.getAttribute('data-uv-ink') === 'true',
+        filter: node.getAttribute('filter') || '',
+      })),
     };
   }, buffer.toString('utf8'));
 }
@@ -287,6 +302,41 @@ async function decodePng(page, buffer) {
       }
     }
     return { width: canvas.width, height: canvas.height, teal, magenta };
+  }, buffer.toString('base64'));
+}
+
+async function comparePngToCanvas(page, buffer) {
+  return page.evaluate(async base64 => {
+    const bytes = Uint8Array.from(atob(base64), character => character.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+    const source = document.querySelector('#cv');
+    if (bitmap.width !== source.width || bitmap.height !== source.height) {
+      return {
+        mismatch: Infinity,
+        png: [bitmap.width, bitmap.height],
+        canvas: [source.width, source.height],
+      };
+    }
+    const decoded = document.createElement('canvas');
+    decoded.width = bitmap.width;
+    decoded.height = bitmap.height;
+    const decodedContext = decoded.getContext('2d');
+    decodedContext.drawImage(bitmap, 0, 0);
+    const exported = decodedContext.getImageData(0, 0, decoded.width, decoded.height).data;
+    const current = source.getContext('2d').getImageData(0, 0, source.width, source.height).data;
+    let mismatch = 0;
+    let maxChannelDelta = 0;
+    for (let index = 0; index < current.length; index++) {
+      const delta = Math.abs(current[index] - exported[index]);
+      if (delta) mismatch++;
+      if (delta > maxChannelDelta) maxChannelDelta = delta;
+    }
+    return {
+      mismatch,
+      maxChannelDelta,
+      png: [bitmap.width, bitmap.height],
+      canvas: [source.width, source.height],
+    };
   }, buffer.toString('base64'));
 }
 
@@ -424,6 +474,226 @@ test('brush footprint previews scale, scatter, ink and the selected mark without
     const hiddenPng = await decodePng(page, (await apiDownload(page, 'exportPNG', 1)).buffer);
     assert.equal(hiddenSvg, visibleSvg, 'SVG export included the live brush footprint');
     assert.deepEqual(hiddenPng, visiblePng, 'PNG export included the live brush footprint');
+  }));
+
+test('UV light fluoresces only reactive marks and restores exact daylight artwork', () =>
+  withApp(async page => {
+    await page.evaluate(() => {
+      const options = {
+        brush: 'finetip', showGrid: false, collide: 'off', scale: 180, brushR: 1,
+        dens: 8, gap: 0, chaos: 0, rays: false, tex: 'flat', op: 1,
+        field: 'off', bgMode: 'plain', bg: '#14110c', uvLight: false,
+      };
+      for (const [key, value] of Object.entries(options)) window.SigilStudio.setOption(key, value);
+      window.SigilStudio.selectSymbol(window.SIGIL_LIB[0].n);
+      window.SigilStudio.selectInk('#ff2e7e', false);
+    });
+    await tapAt(page, 0.25);
+    await page.evaluate(() => window.SigilStudio.selectInk('#ff2e7e', true));
+    await tapAt(page, 0.75);
+
+    const daylightProject = await page.evaluate(() => window.SigilStudio.getProject());
+    assert.equal(daylightProject.settings.uvLight, false, 'UV light should default off');
+    assert.equal(daylightProject.settings.uvInk, true, 'reactive ink selection was not retained');
+    assert.equal(daylightProject.stamps.length, 2, 'UV fixture should contain two real pointer marks');
+    assert.deepEqual(
+      daylightProject.stamps.map(stamp => ({ ink: stamp.ink.toLowerCase(), uvInk: stamp.uvInk })),
+      [
+        { ink: '#ff2e7e', uvInk: false },
+        { ink: '#ff2e7e', uvInk: true },
+      ],
+      'same pigment did not retain independent regular and UV identities',
+    );
+    await page.locator('#cv').evaluate(canvas => {
+      window.__uvDaylight = new Uint8ClampedArray(
+        canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data,
+      );
+    });
+
+    const daylightSvg = await parseSvg(
+      page,
+      Buffer.from(await page.evaluate(() => window.SigilStudio.getSVG())),
+    );
+    assert.deepEqual(daylightSvg.uvMarks.map(mark => mark.reactive), [false, true]);
+    assert.equal(
+      daylightSvg.filters.some(id => id.startsWith('uv-glow')),
+      false,
+      'daylight SVG contains a UV glow filter',
+    );
+
+    await page.locator('#uvLightToggle').click();
+    await poll(
+      async () => (await page.evaluate(() => window.SigilStudio.getState())).settings.uvLight,
+      'persistent UV switch did not turn on the light',
+    );
+    assert.equal(await page.locator('#uvLightToggle').getAttribute('aria-pressed'), 'true');
+    const litProject = await page.evaluate(() => window.SigilStudio.getProject());
+    assert.equal(litProject.rngState, daylightProject.rngState, 'UV light consumed random state');
+    assert.deepEqual(litProject.stamps, daylightProject.stamps, 'UV light mutated saved mark geometry');
+
+    const fluorescence = await page.locator('#cv').evaluate((canvas, marks) => {
+      const before = window.__uvDaylight;
+      const { width, height } = canvas;
+      const after = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+      const roomDelta =
+        after[0] + after[1] + after[2] -
+        before[0] - before[1] - before[2];
+      let regularExcess = 0;
+      let reactiveExcess = 0;
+      for (let y = 0; y < height; y += 2) {
+        for (let x = 0; x < width; x += 2) {
+          const regularRadius = Math.max(30, marks[0].s * 1.4);
+          const reactiveRadius = Math.max(30, marks[1].s * 1.4);
+          const inRegular = Math.hypot(x - marks[0].x, y - marks[0].y) <= regularRadius;
+          const inReactive = Math.hypot(x - marks[1].x, y - marks[1].y) <= reactiveRadius;
+          if (!inRegular && !inReactive) continue;
+          const offset = (y * width + x) * 4;
+          const beforeLight = before[offset] + before[offset + 1] + before[offset + 2];
+          const afterLight = after[offset] + after[offset + 1] + after[offset + 2];
+          if (afterLight - beforeLight > roomDelta + 20) {
+            if (inRegular) regularExcess++;
+            if (inReactive) reactiveExcess++;
+          }
+        }
+      }
+      return { roomDelta, regularExcess, reactiveExcess };
+    }, daylightProject.stamps.map(stamp => ({ x: stamp.x, y: stamp.y, s: stamp.s })));
+    assert(fluorescence.reactiveExcess > 30, 'reactive mark did not fluoresce under UV');
+    assert(
+      fluorescence.regularExcess < Math.max(3, fluorescence.reactiveExcess * 0.03),
+      `same-color regular mark fluoresced as if it were UV reactive: ${JSON.stringify(fluorescence)}`,
+    );
+
+    const litSvg = await parseSvg(
+      page,
+      Buffer.from(await page.evaluate(() => window.SigilStudio.getSVG())),
+    );
+    const uvFilter = litSvg.filters.find(id => id.startsWith('uv-glow'));
+    assert(uvFilter, 'lit SVG omitted its UV glow effect');
+    const regularMark = litSvg.uvMarks.find(mark => !mark.reactive);
+    const reactiveMark = litSvg.uvMarks.find(mark => mark.reactive);
+    assert.equal(regularMark.filter, '', 'regular same-color mark received the UV filter');
+    assert.equal(reactiveMark.filter, `url(#${uvFilter})`, 'reactive mark did not receive the UV filter');
+    const litPng = await apiDownload(page, 'exportPNG', 1);
+    assert.deepEqual(
+      await comparePngToCanvas(page, litPng.buffer),
+      { mismatch: 0, maxChannelDelta: 0, png: [1200, 900], canvas: [1200, 900] },
+      'lit PNG does not match the rendered UV canvas',
+    );
+
+    await page.locator('#uvLightToggle').click();
+    await poll(
+      async () => !(await page.evaluate(() => window.SigilStudio.getState())).settings.uvLight,
+      'persistent UV switch did not restore daylight',
+    );
+    assert.equal(await page.locator('#uvLightToggle').getAttribute('aria-pressed'), 'false');
+    const restored = await page.locator('#cv').evaluate(canvas => {
+      const before = window.__uvDaylight;
+      const after = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+      let mismatch = 0;
+      for (let index = 0; index < after.length; index++) if (after[index] !== before[index]) mismatch++;
+      return mismatch;
+    });
+    assert.equal(restored, 0, 'switching UV off did not restore the exact daylight canvas bytes');
+    assert.deepEqual(
+      await page.evaluate(() => window.SigilStudio.getProject()),
+      daylightProject,
+      'UV on/off cycle changed coordinates, RNG or project state',
+    );
+    const restoredSvg = await page.evaluate(() => window.SigilStudio.getSVG());
+    assert(!restoredSvg.includes('id="uv-glow'), 'daylight SVG retained the UV effect');
+    const daylightPng = await apiDownload(page, 'exportPNG', 1);
+    assert.deepEqual(
+      await comparePngToCanvas(page, daylightPng.buffer),
+      { mismatch: 0, maxChannelDelta: 0, png: [1200, 900], canvas: [1200, 900] },
+      'daylight PNG does not match the restored canvas',
+    );
+  }));
+
+test('UV ink and light survive project save, load and recovery while old projects default off', () =>
+  withApp(async page => {
+    await page.evaluate(() => {
+      const options = {
+        brush: 'finetip', showGrid: false, collide: 'off', scale: 120,
+        brushR: 1, chaos: 0, rays: false, tex: 'flat', bgMode: 'plain',
+      };
+      for (const [key, value] of Object.entries(options)) window.SigilStudio.setOption(key, value);
+      window.SigilStudio.selectSymbol(window.SIGIL_LIB[0].n);
+      window.SigilStudio.selectInk('#8fffbe', true);
+      window.SigilStudio.setOption('uvLight', true);
+    });
+    await tapAt(page, 0.5);
+
+    const saved = await download(page, '#btnSave');
+    const project = JSON.parse(saved.buffer.toString('utf8'));
+    assert.equal(project.settings.uvInk, true, 'project save lost the reactive-ink selection');
+    assert.equal(project.settings.uvLight, true, 'project save lost the UV-light state');
+    assert(project.stamps.length > 0, 'UV persistence fixture contains no marks');
+    assert(project.stamps.every(stamp => stamp.uvInk === true), 'project save lost a mark UV flag');
+    await poll(async () => page.evaluate(() => {
+      const value = localStorage.getItem('sigil-studio-recovery-v2');
+      if (!value) return false;
+      const recovery = JSON.parse(value);
+      return recovery.settings?.uvInk === true &&
+        recovery.settings?.uvLight === true &&
+        recovery.stamps?.every(stamp => stamp.uvInk === true);
+    }), 'local recovery did not retain the UV flags');
+
+    await page.evaluate(() => {
+      window.SigilStudio.selectInk('#8fffbe', false);
+      window.SigilStudio.setOption('uvLight', false);
+      window.SigilStudio.clear();
+    });
+    await loadProject(page, project, saved.name);
+    const loaded = await poll(async () => {
+      const state = await page.evaluate(() => window.SigilStudio.getState());
+      return !state.busy && state.settings.uvLight && state.settings.uvInk ? state : null;
+    }, 'project load did not restore the UV settings');
+    assert.equal(loaded.stamps, project.stamps.length);
+    assert(
+      (await page.evaluate(() => window.SigilStudio.getProject())).stamps
+        .every(stamp => stamp.uvInk === true),
+      'project load did not restore reactive marks',
+    );
+
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(
+      () => document.body.classList.contains('studio-ready') && !!window.SigilStudio?.getState(),
+    );
+    const fresh = await page.evaluate(() => window.SigilStudio.getState());
+    assert.equal(fresh.settings.uvInk, false, 'fresh session inherited UV ink before recovery');
+    assert.equal(fresh.settings.uvLight, false, 'fresh session inherited UV light before recovery');
+    await page.locator('#resumeStrip').waitFor({ state: 'visible' });
+    await page.locator('#resumeLast').click();
+    const recovered = await poll(async () => {
+      const state = await page.evaluate(() => window.SigilStudio.getState());
+      return state.hasArtwork && state.settings.uvInk && state.settings.uvLight ? state : null;
+    }, 'session recovery did not restore the UV state');
+    assert.equal(recovered.stamps, project.stamps.length);
+    assert(
+      (await page.evaluate(() => window.SigilStudio.getProject())).stamps
+        .every(stamp => stamp.uvInk === true),
+      'session recovery did not restore reactive mark flags',
+    );
+
+    const legacy = structuredClone(project);
+    delete legacy.settings.uvInk;
+    delete legacy.settings.uvLight;
+    for (const stamp of legacy.stamps) delete stamp.uvInk;
+    const legacyLoaded = await page.evaluate(value => window.SigilStudio.load(value), legacy);
+    assert.equal(legacyLoaded, true, 'old v2 project failed to load');
+    const legacyState = await page.evaluate(() => window.SigilStudio.getState());
+    assert.equal(legacyState.settings.uvInk, false, 'old project defaulted to reactive ink');
+    assert.equal(legacyState.settings.uvLight, false, 'old project defaulted to UV light on');
+    assert(
+      (await page.evaluate(() => window.SigilStudio.getProject())).stamps
+        .every(stamp => stamp.uvInk === false),
+      'old project marks defaulted to reactive',
+    );
+    assert(
+      !(await page.evaluate(() => window.SigilStudio.getSVG())).includes('id="uv-glow'),
+      'old project unexpectedly exported a UV effect',
+    );
   }));
 
 test('vector project save/load keeps old and new marks in PNG and SVG exports', () =>
@@ -778,11 +1048,14 @@ test('mobile opens with a full-width stage and accepts a real touch pointer', ()
     const layout = await page.evaluate(() => {
       const stage = document.querySelector('#stage').getBoundingClientRect();
       const quickActions = document.querySelector('.quick-actions').getBoundingClientRect();
+      const uvButton = document.querySelector('#uvLightToggle').getBoundingClientRect();
       return {
         viewport: document.documentElement.clientWidth,
         documentWidth: document.documentElement.scrollWidth,
         stageWidth: stage.width,
         quickActions: { left: quickActions.left, right: quickActions.right, width: quickActions.width },
+        uvButton: { left: uvButton.left, right: uvButton.right, width: uvButton.width },
+        uvPressed: document.querySelector('#uvLightToggle').getAttribute('aria-pressed'),
         openDialogs: document.querySelectorAll('dialog[open]').length,
         toolsVisible: !!document.querySelector('.play-dock')?.getClientRects().length,
         expandedControls: [...document.querySelectorAll('[aria-haspopup="dialog"]')]
@@ -801,6 +1074,57 @@ test('mobile opens with a full-width stage and accepts a real touch pointer', ()
       layout.quickActions.left >= 0 && layout.quickActions.right <= layout.viewport,
       'mobile quick actions are clipped off-screen',
     );
+    assert(
+      layout.uvButton.width >= 44 && layout.uvButton.left >= 0 && layout.uvButton.right <= layout.viewport,
+      'mobile UV switch is missing or clipped off-screen',
+    );
+    assert.equal(layout.uvPressed, 'false', 'mobile UV switch should start off');
+
+    await openDialog(page, '#inkOpen', '#inkDialog');
+    await page.locator('#inkDialog').evaluate(async dialog => {
+      await Promise.all(dialog.getAnimations({ subtree: true }).map(animation => animation.finished));
+    });
+    const inkLayout = await page.evaluate(() => {
+      const dialog = document.querySelector('#inkDialog');
+      const bounds = dialog.getBoundingClientRect();
+      const palette = document.querySelector('#uvPalette').getBoundingClientRect();
+      return {
+        dialogLeft: bounds.left,
+        dialogRight: bounds.right,
+        dialogWidth: bounds.width,
+        dialogClientWidth: dialog.clientWidth,
+        dialogScrollWidth: dialog.scrollWidth,
+        paletteLeft: palette.left,
+        paletteRight: palette.right,
+        uvSwatches: document.querySelectorAll('#uvPalette button[data-uv="true"]').length,
+        regularSwatches: document.querySelectorAll('#inkPalette button[data-uv="false"]').length,
+      };
+    });
+    assert(inkLayout.uvSwatches > 0, 'mobile ink panel has no UV swatches');
+    assert(inkLayout.regularSwatches > 0, 'mobile ink panel has no standard swatches');
+    assert(
+      inkLayout.dialogLeft >= 0 && inkLayout.dialogRight <= layout.viewport + 1,
+      'mobile UV ink panel is clipped off-screen',
+    );
+    assert(
+      inkLayout.dialogScrollWidth <= inkLayout.dialogClientWidth + 1 &&
+      inkLayout.paletteLeft >= inkLayout.dialogLeft &&
+      inkLayout.paletteRight <= inkLayout.dialogRight + 1,
+      `mobile UV ink panel overflows horizontally: ${JSON.stringify(inkLayout)}`,
+    );
+    await page.locator('#uvPalette [data-ink="#ff2e7e"][data-uv="true"]').click();
+    let inkState = await page.evaluate(() => window.SigilStudio.getState().settings);
+    assert.equal(inkState.ink.toLowerCase(), '#ff2e7e');
+    assert.equal(inkState.uvInk, true, 'UV swatch did not atomically select reactive ink');
+    await page.locator('#inkPalette [data-ink="#ff2e7e"][data-uv="false"]').click();
+    inkState = await page.evaluate(() => window.SigilStudio.getState().settings);
+    assert.equal(inkState.ink.toLowerCase(), '#ff2e7e');
+    assert.equal(inkState.uvInk, false, 'same-color standard swatch stayed UV reactive');
+    await closeDialog(page, '#inkDialog');
+    await page.locator('#uvLightToggle').click();
+    assert.equal(await page.locator('#uvLightToggle').getAttribute('aria-pressed'), 'true');
+    await page.locator('#uvLightToggle').click();
+    assert.equal(await page.locator('#uvLightToggle').getAttribute('aria-pressed'), 'false');
 
     await openDialog(page, '#layersOpen', '#layersDialog');
     await page.locator('#shadowEnabled').check();

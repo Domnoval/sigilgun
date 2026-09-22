@@ -19,6 +19,8 @@ The Node dependencies are only for development tests.
 - **Brush** changes the touch, size, density and chaos.
 - **Symbols** opens a visual, searchable cabinet. Select one mark or mix a collection.
 - **Ink** changes future marks and the background without deleting existing work.
+- **UV** switches between daylight and blacklight. Choose reactive pigments in Ink
+  to paint marks that reveal their glow under UV. Standard pigments stay separate.
 - **Structure** exposes artist systems, placement fields and repeatable seeds.
 - **Layers** separates, hides, blends, reorders or clears parts of the composition.
   Each layer can optionally cast a shadow, with distance, softness and strength.
@@ -75,6 +77,26 @@ positions. The preview is an interface overlay and never enters artwork exports.
 Stroke sampling follows distance traveled, rather than the number of pointer
 events sent by a device. Slow and fast movement along the same path therefore
 produce consistent spacing while preserving the selected scatter and Chaos.
+
+## Blacklight inks
+
+Ink offers five UV-reactive pigments and a switch for making a custom ink reactive.
+Selecting a standard swatch returns to standard ink. Material is stored with each
+mark, so changing ink never changes the material of marks already painted.
+The UV button stays available above the canvas, including on phones; the Ink panel
+also has a light switch for previewing pigment choices.
+
+Daylight shows a quieter pigment. Under UV, reactive marks gain a bright core and
+colored bloom against a darkened canvas. This is a digital blacklight simulation.
+Ordinary marks do not acquire fluorescence just because they use the same color.
+Switching the light preserves mark positions, layer order and random state.
+
+Project files preserve both ink materials and the light setting. PNG and SVG
+export the currently selected appearance; the Export panel says which one.
+Switch off UV to export daylight. Physical fluorescent printing requires a
+specialist ink and supplier; a standard print only reproduces the rendered look.
+
+Print ordering and the optional guided welcome are pinned in [TODO.md](TODO.md).
 
 ## Development checks
 

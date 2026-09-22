@@ -9,6 +9,7 @@
     brush:'<path d="m15 3 6 6-10 10-6-6Z M5 13c-4 0-2 5-4 8 5 0 9-1 8-4"/>',
     symbols:'<path d="M12 2v20M2 12h20M5 5l14 14M19 5 5 19"/><circle cx="12" cy="12" r="6"/>',
     ink:'<path d="M12 2C10 6 5 10 5 15a7 7 0 0 0 14 0c0-5-5-9-7-13Z"/><path d="M8 15a4 4 0 0 0 4 4"/>',
+    uv:'<rect x="8" y="5" width="8" height="14" rx="4"/><path d="M12 1v1m0 20v1M2 12H1m22 0h-1M4 4l2 2m12 12 2 2M4 20l2-2M18 6l2-2"/>',
     shape:'<path d="m12 2 10 18H2Z"/><circle cx="12" cy="13" r="6"/>',
     layers:'<path d="m12 2 10 5-10 5L2 7Z M2 12l10 5 10-5M2 17l10 5 10-5"/>',
     burst:'<path d="m12 1 2 7 7-4-4 7 6 2-7 2 4 7-7-4-2 6-2-7-7 4 4-7-6-2 7-2-4-7 7 4Z"/>',
@@ -24,7 +25,7 @@
   let returnFocus, activeDialog, toastTimer;
   const shellHeader = document.createElement('header');
   shellHeader.className = 'studio-header';
-  shellHeader.innerHTML = '<a class="wordmark" href="#" aria-label="Sigil Gun home"><span class="brand-symbol" aria-hidden="true">✳</span><span>sigil gun<small>A Studio 137 instrument</small></span></a><div class="header-actions">'+button('projectOpen','Project','menu','quiet-button')+button('exportOpen','Export','export','export-button')+'</div>';
+  shellHeader.innerHTML = '<a class="wordmark" href="#" aria-label="Sigil Gun home"><span class="brand-symbol" aria-hidden="true">✳</span><span>sigil gun<small>A Studio 137 instrument</small></span></a><div class="header-actions">'+button('uvLightToggle','UV','uv','uv-light-button')+button('projectOpen','Project','menu','quiet-button')+button('exportOpen','Export','export','export-button')+'</div>';
   document.body.prepend(shellHeader);
   shellHeader.querySelector('a').addEventListener('click', e => e.preventDefault());
   panel.hidden=true;
@@ -88,7 +89,10 @@
   moveSlider('anchorIn',anchorSection);moveSlider('anchorP',anchorSection);take('atlas',anchorSection,true);
   $('anchorP').max='100';
   const inkContent=dialog('inkDialog','Set the mood.','The next marks take the new ink. Your existing marks stay as drawn.');
-  inkContent.innerHTML='<div class="color-editors"><label>Ink<input type="color" id="shellInk" value="#e8dfce"></label><label>Canvas<input type="color" id="shellBackground" value="#14110c"></label></div><div id="inkPalette" class="ink-palette"></div>';
+  inkContent.innerHTML='<div class="color-editors"><label>Ink<input type="color" id="shellInk" value="#e8dfce"></label><label>Canvas<input type="color" id="shellBackground" value="#14110c"></label></div><div id="inkPalette" class="ink-palette" role="group" aria-label="Standard inks"></div>';
+  const uvInks=section(inkContent,'A second life in the dark.');
+  uvInks.classList.add('uv-ink-section');
+  uvInks.innerHTML+='<p class="dim">Quiet in daylight. Electric under UV. Pick a reactive ink, paint, then hit the light.</p><div id="uvPalette" class="uv-palette" role="group" aria-label="UV reactive inks"></div><label class="uv-ink-toggle"><input id="uvInkToggle" type="checkbox">UV reactive ink</label><p class="dim" id="uvInkStatus">New marks use standard ink.</p>'+button('uvLightPreview','Switch on UV','uv','uv-preview-button');
   const palettes=section(inkContent,'Pairings');
   const paletteChips=panel.querySelector('.chip[data-p]')?.parentElement;
   if(paletteChips) palettes.append(paletteChips);
@@ -120,7 +124,7 @@
   const exportContent=dialog('exportDialog','Take it with you.','An image to share. A vector to build with. A project to keep exploring.');
   moveSlider('expK',exportContent);
   ['btnExport','btnSVG','btnSave'].forEach(id=>take(id,exportContent));
-  exportContent.insertAdjacentHTML('beforeend','<p class="export-note">PNG keeps the rendered look. SVG preserves your vector marks; older raster projects keep their embedded artwork.</p>');
+  exportContent.insertAdjacentHTML('beforeend','<p id="exportLightNote" class="export-light-note"></p><p class="export-note">PNG keeps the rendered look. SVG preserves your vector marks; older raster projects keep their embedded artwork.</p>');
   const projectContent=dialog('projectDialog','Your workspace.','Keep a copy. Come back to it. Make another mess.');
   projectContent.innerHTML='<div id="recoveryNotice" hidden><p>A saved session is on this browser.</p>'+button('restoreSession','Restore session',null,'text-button')+'</div>'+
     button('shellSave','Save project',null,'project-action')+button('shellLoad','Open project',null,'project-action')+
@@ -148,8 +152,20 @@
   for(const [id,w,h] of [['landscapeCanvas',1200,900],['portraitCanvas',900,1200],['squareCanvas',1200,1200]])$(id).onclick=()=>{api()?.newProject(w,h);$('projectDialog').close();};
   $('shellInk').addEventListener('input',e=>api()?.setOption('ink',e.target.value));
   $('shellBackground').addEventListener('input',e=>api()?.setOption('bg',e.target.value));
+  function toggleUV(){const on=!api()?.getState().settings.uvLight;api()?.setOption('uvLight',on);notify(on?'UV on. Let the hidden marks speak.':'Daylight restored.');}
+  for(const id of ['uvLightToggle','uvLightPreview']){$(id).onclick=toggleUV;$(id).setAttribute('aria-pressed','false');}
+  $('uvLightToggle').setAttribute('aria-label','UV light');
+  $('uvInkToggle').addEventListener('change',e=>api()?.setOption('uvInk',e.target.checked));
   const colors=[['Bone','#E8DFCE'],['Void','#0A0907'],['Phosphor','#63D98F'],['Magenta','#FF2E7E'],['Copper','#36B9A2'],['Signal','#DF7A1F']];
-  colors.forEach(([name,value])=>{const b=document.createElement('button');b.type='button';b.className='ink-swatch';b.style.setProperty('--swatch',value);b.title=name;b.setAttribute('aria-label',name+' ink');b.onclick=()=>api()?.setOption('ink',value);$('inkPalette').append(b);});
+  function inkSwatch(name,value,reactive){
+    const b=document.createElement('button');b.type='button';b.className=reactive?'uv-swatch':'ink-swatch';b.style.setProperty('--swatch',value);
+    b.dataset.ink=value.toLowerCase();b.dataset.uv=String(reactive);b.title=name;b.setAttribute('aria-label',name+(reactive?' UV ink':' ink'));b.setAttribute('aria-pressed','false');
+    if(reactive)b.innerHTML='<i aria-hidden="true"></i><span>'+name+'</span>';
+    b.onclick=()=>api()?.selectInk(value,reactive);return b;
+  }
+  colors.forEach(([name,value])=>$('inkPalette').append(inkSwatch(name,value,false)));
+  const uvColors=[['Phosphor','#8FFFBE'],['Hot pink','#FF2E7E'],['Copper','#36B9A2'],['Signal','#DF7A1F'],['Moonmilk','#E8DFCE']];
+  uvColors.forEach(([name,value])=>$('uvPalette').append(inkSwatch(name,value,true)));
   const glyphSVG = sym => {
     const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 1000 1000');svg.setAttribute('aria-hidden','true');
     const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',sym.d);path.setAttribute('fill','currentColor');svg.append(path);return svg;
@@ -216,6 +232,16 @@
     $('brushOpen').querySelector('span').textContent=brushLabels[settings.brush]||'Brush';
     $('layersOpen').querySelector('span').textContent='Layers'+(layerCount>1?' · '+layerCount:'');
     $('inkOpen').style.setProperty('--current-ink',settings.ink||'#e8dfce');
+    $('inkOpen').querySelector('span').textContent=settings.uvInk?'UV ink':'Ink';
+    document.body.classList.toggle('uv-active',!!settings.uvLight);
+    for(const id of ['uvLightToggle','uvLightPreview'])$(id).setAttribute('aria-pressed',String(!!settings.uvLight));
+    $('uvLightToggle').title=settings.uvLight?'UV light is on. Switch to daylight.':'Switch on UV light';
+    $('uvLightPreview').querySelector('span').textContent=settings.uvLight?'Switch off UV':'Switch on UV';
+    $('uvLightPreview').setAttribute('aria-label',settings.uvLight?'Switch off UV':'Switch on UV');
+    $('uvInkToggle').checked=!!settings.uvInk;
+    $('uvInkStatus').textContent=settings.uvInk?'New marks are UV reactive. Your earlier marks keep their ink.':'New marks use standard ink.';
+    $('exportLightNote').textContent=settings.uvLight?'Exporting the UV appearance. Switch off UV for the daylight version.':'Exporting the daylight appearance. Switch on UV to export the glow.';
+    document.querySelectorAll('[data-ink]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.ink===settings.ink?.toLowerCase()&&b.dataset.uv===String(!!settings.uvInk))));
     if(settings.ink)$('shellInk').value=settings.ink;
     if(settings.bg)$('shellBackground').value=settings.bg;
     if(state.selectedSymbol!==undefined&&selected!==state.selectedSymbol){selected=state.selectedSymbol;renderSymbols();}
@@ -248,8 +274,10 @@
     cursor.style.transform='translate('+(x-r.left)+'px,'+(y-r.top)+'px)';
     cursor.style.setProperty('--footprint-size',diameter+'px');
     cursor.style.setProperty('--mark-size',size+'px');
-    cursor.style.setProperty('--ink-preview',settings.ink);
-    cursor.style.setProperty('--preview-strength',Math.max(.045,settings.op*.16));
+    const appearance=api()?.getInkAppearance?.()||{color:settings.ink,opacity:1,glow:0};
+    cursor.style.setProperty('--ink-preview',appearance.color);
+    cursor.style.setProperty('--preview-strength',Math.max(.045,settings.op*.16*appearance.opacity));
+    cursor.classList.toggle('uv-reactive',!!settings.uvInk&&!!settings.uvLight);
     cursor.style.setProperty('--mark-angle',(settings.brush==='calligraphy'?previewAngle+Math.PI/2:0)+'rad');
     cursor.dataset.brush=settings.brush;cursor.dataset.placement=followsPointer?'pointer':'field';
     const name=state.selectedSymbol||null;

@@ -253,7 +253,7 @@ const S = {
   lens: 'none', rays: false, noRepeat: false, bimodal: false, snap: 'off',
   anchors: [], anchorPower: 0, collide: 'all', blend: 'source-over',
   field: 'off', fieldD: 50, showGrid: true,
-  tex: 'flat', accent: '#ff5eb1', accRate: 0, duo: false, bgMode: 'plain', atlas: false
+  tex: 'flat', accent: '#ff5eb1', accRate: 0, duo: false, bgMode: 'plain', atlas: false, uvInk: false, uvLight: false
 };
 const DEFAULT_SETTINGS = {...S, anchors: []};
 let lastSym = null;
@@ -326,12 +326,12 @@ function newLayer(name,id){
 }
 function activeCtx(){return layers[activeLayer].ctx;}
 function paintBackground(c){
-  if(S.bgMode==='plain'){c.fillStyle=S.bg;c.fillRect(0,0,W,H);}
+  if(S.bgMode==='plain'){c.fillStyle=backgroundAppearance(S.bg);c.fillRect(0,0,W,H);}
   else if(S.bgMode==='quad'){
     const q=['#e87fb8','#efe9dc','#efe9dc','#e8a272'];
-    q.forEach((color,i)=>{c.fillStyle=color;c.fillRect(i%2*W/2,Math.floor(i/2)*H/2,W/2,H/2);});
+    q.forEach((color,i)=>{c.fillStyle=backgroundAppearance(color);c.fillRect(i%2*W/2,Math.floor(i/2)*H/2,W/2,H/2);});
   }else{
-    ['#e87fb8','#e8a272','#e8d072','#efe9dc'].forEach((color,i)=>{c.fillStyle=color;c.fillRect(i*W/4,0,W/4,H);});
+    ['#e87fb8','#e8a272','#e8d072','#efe9dc'].forEach((color,i)=>{c.fillStyle=backgroundAppearance(color);c.fillRect(i*W/4,0,W/4,H);});
   }
 }
 function compositeLayer(c,L,scale=1){
@@ -395,6 +395,27 @@ function renderLayerList(){
     clear.onclick=()=>action('Layer cleared',()=>{L.base=null;stamps=stamps.filter(st=>st.layerId!==L.id);renderLayer(L);rebuildGrid();});
     box.append(row);
   });
+}
+const inkAppearanceCache=new Map();
+function rgbHex(rgb){return '#'+rgb.map(v=>Math.round(Math.max(0,Math.min(255,v))).toString(16).padStart(2,'0')).join('');}
+function backgroundAppearance(pigment){
+  if(!S.uvLight)return pigment;
+  const rgb=hexToRgb(pigment),violet=[36,19,61];
+  return rgbHex(rgb.map((v,i)=>(v*.15+violet[i]*.85)*.62));
+}
+function getInkAppearance(pigment=S.ink,reactive=S.uvInk){
+  pigment=color(pigment,DEFAULT_SETTINGS.ink);reactive=reactive===true;
+  const key=pigment+'|'+reactive+'|'+S.uvLight;
+  if(inkAppearanceCache.has(key))return inkAppearanceCache.get(key);
+  const rgb=hexToRgb(pigment);let display=pigment,glow=null;
+  if(reactive&&S.uvLight){display=rgbHex(rgb.map(v=>v*.9+25.5));glow=pigment;}
+  else if(reactive){const mean=(rgb[0]+rgb[1]+rgb[2])/3;display=rgbHex(rgb.map(v=>v*.66+mean*.16));}
+  else if(S.uvLight){
+    const luma=rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722,lift=Math.max(0,(65-luma)/65)*.4,lamp=[178,154,255];
+    if(lift>0)display=rgbHex(rgb.map((v,i)=>v*(1-lift)+lamp[i]*lift));
+  }
+  const result=Object.freeze({color:display,opacity:1,glow});
+  if(inkAppearanceCache.size>=2048)inkAppearanceCache.clear();inkAppearanceCache.set(key,result);return result;
 }
 function hexToRgb(h){ h=h.replace('#',''); return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)]; }
 function rgbStr(hex, a){ const [r,g,b]=hexToRgb(hex); return `rgba(${r},${g},${b},${a})`; }
@@ -552,7 +573,7 @@ function stamp(sym,x,y,ang,scalePx,alpha){
   if(!(chaos>.7||(b.over>0&&rand()<b.over*(.4+chaos)))&&clash(x,y,r))return false;
   if(x<r||y<r||x>W-r||y>H-r)return false;
   const ink=S.accRate>0&&rand()*100<S.accRate?S.accent:S.ink;
-  const st={n:sym.n,x,y,ang,s:scalePx,a:alpha,r,ink,accent:S.accent,brush:S.brush,tex:S.tex,layerId:layers[activeLayer].id,duo:S.duo,atlas:S.atlas,effectInk:S.ink,drips:[],rays:[],specks:[],dots:[]};
+  const st={n:sym.n,x,y,ang,s:scalePx,a:alpha,r,ink,accent:S.accent,brush:S.brush,tex:S.tex,layerId:layers[activeLayer].id,duo:S.duo,atlas:S.atlas,effectInk:S.ink,uvInk:!!S.uvInk,drips:[],rays:[],specks:[],dots:[]};
   if(S.rays&&scalePx>26&&S.snap==='off')for(let i=0;i<6;i++)st.rays.push({ra:ang+i/6*Math.PI*2,len:scalePx*(1.15+rand()*.5)});
   if(S.tex==='chalk')for(let i=0;i<22;i++){const an=rand()*Math.PI*2,rr=scalePx*(.12+rand()*.5);st.specks.push({sx:x+Math.cos(an)*rr,sy:y+Math.sin(an)*rr,r:.5+rand()*1.1,a:.14+rand()*.3});}
   if(S.tex==='drip'){
@@ -680,24 +701,25 @@ const LENSES = {
 // One immutable mark renderer serves the canvas, project restore and PNG export.
 function drawStampVector(c,st,exportScale=1){
   const sym=BYNAME.get(st.n);if(!sym)return;
-  const unit=st.s/1000,b=BRUSHES[st.brush],effectInk=st.effectInk||st.ink;
+  const unit=st.s/1000,b=BRUSHES[st.brush],appearance=getInkAppearance(st.ink,st.uvInk===true),ink=appearance.color;
+  const accent=getInkAppearance(st.accent,st.uvInk===true).color,effectInk=getInkAppearance(st.effectInk||st.ink,st.uvInk===true).color;
   c.save();
   for(const ray of st.rays){c.strokeStyle=rgbStr(effectInk,.22);c.lineWidth=Math.max(1,st.s*.045);c.beginPath();c.moveTo(st.x+Math.cos(ray.ra)*st.s*.5,st.y+Math.sin(ray.ra)*st.s*.5);c.lineTo(st.x+Math.cos(ray.ra)*ray.len,st.y+Math.sin(ray.ra)*ray.len);c.stroke();}
   c.lineWidth=1;
   if(b.pool){const r=st.s*1.1,g=c.createRadialGradient(st.x,st.y,0,st.x,st.y,r);g.addColorStop(0,'rgba(0,0,0,.22)');g.addColorStop(.75,'rgba(0,0,0,.10)');g.addColorStop(1,'rgba(0,0,0,0)');c.fillStyle=g;c.fillRect(st.x-r,st.y-r,r*2,r*2);}
   c.save();c.translate(st.x,st.y);c.rotate(st.ang);c.scale(unit,unit);c.translate(-500,-500);
-  if(st.tex==='neon'){c.shadowColor=st.ink;c.shadowBlur=st.s*.45*exportScale;}
-  c.fillStyle=rgbStr(st.ink,st.a);c.fill(pathFor(sym));
-  if(st.duo){c.save();c.translate(500,500);c.scale(.6,.6);c.translate(-500,-500);c.fillStyle=rgbStr(st.accent,st.a*.9);c.fill(pathFor(sym));c.restore();}
+  if(st.tex==='neon'||appearance.glow){c.shadowColor=appearance.glow||ink;c.shadowBlur=(st.tex==='neon'?st.s*.45:Math.max(6,st.s*.28))*exportScale;}
+  c.fillStyle=rgbStr(ink,st.a);c.fill(pathFor(sym));
+  if(st.duo){c.save();c.translate(500,500);c.scale(.6,.6);c.translate(-500,-500);c.fillStyle=rgbStr(accent,st.a*.9);c.fill(pathFor(sym));c.restore();}
   if(st.tex==='gloss'){
     const gy=500-sym.h*.5,g=c.createLinearGradient(500-sym.w*.5,gy,500-sym.w*.5,gy+sym.h*.92);
     g.addColorStop(0,'rgba(255,255,255,.55)');g.addColorStop(.45,'rgba(255,255,255,.12)');g.addColorStop(1,'rgba(255,255,255,0)');c.fillStyle=g;c.fill(pathFor(sym));
     c.fillStyle='rgba(255,255,255,.5)';c.beginPath();c.arc(500-sym.w*.24,500-sym.h*.26,22,0,Math.PI*2);c.fill();
   }
   c.restore();
-  for(const sp of st.specks){c.fillStyle=rgbStr(st.ink,sp.a);c.beginPath();c.arc(sp.sx,sp.sy,sp.r,0,Math.PI*2);c.fill();}
-  for(const dr of st.drips){c.fillStyle=rgbStr(st.ink,.94);c.beginPath();c.moveTo(dr.lx-dr.sw*.5,dr.byp);c.quadraticCurveTo(dr.lx+dr.sway*.25,dr.byp+dr.L*.55,dr.lx+dr.sway,dr.byp+dr.L);c.quadraticCurveTo(dr.lx+dr.sway*.45,dr.byp+dr.L*.85,dr.lx+dr.sw*.5,dr.byp);c.closePath();c.fill();}
-  if(st.atlas){c.save();c.translate(st.x-st.r*.95,st.y-st.r*.95);c.rotate(-st.ang);c.font=Math.max(9,unit*85)+'px monospace';c.fillStyle=rgbStr(st.ink,.55);c.textAlign='center';c.textBaseline='middle';c.fillText(window.SIGIL_INDEX[st.n],0,0);c.restore();}
+  for(const sp of st.specks){c.fillStyle=rgbStr(ink,sp.a);c.beginPath();c.arc(sp.sx,sp.sy,sp.r,0,Math.PI*2);c.fill();}
+  for(const dr of st.drips){c.fillStyle=rgbStr(ink,.94);c.beginPath();c.moveTo(dr.lx-dr.sw*.5,dr.byp);c.quadraticCurveTo(dr.lx+dr.sway*.25,dr.byp+dr.L*.55,dr.lx+dr.sway,dr.byp+dr.L);c.quadraticCurveTo(dr.lx+dr.sway*.45,dr.byp+dr.L*.85,dr.lx+dr.sw*.5,dr.byp);c.closePath();c.fill();}
+  if(st.atlas){c.save();c.translate(st.x-st.r*.95,st.y-st.r*.95);c.rotate(-st.ang);c.font=Math.max(9,unit*85)+'px monospace';c.fillStyle=rgbStr(ink,.55);c.textAlign='center';c.textBaseline='middle';c.fillText(window.SIGIL_INDEX[st.n],0,0);c.restore();}
   for(const dt of st.dots){c.fillStyle=rgbStr(effectInk,.30);c.beginPath();c.arc(dt.dx,dt.dy,dt.r,0,Math.PI*2);c.fill();}
   if(b.edge){c.save();c.translate(st.x+1.2,st.y+1.2);c.rotate(st.ang);c.scale(unit,unit);c.translate(-500,-500);c.fillStyle=rgbStr(effectInk,st.a*.3);c.fill(pathFor(sym));c.restore();}
   c.restore();
@@ -729,6 +751,7 @@ function getBrushPreview(){
   if(S.tex==='chalk')effectRadius=Math.max(effectRadius,maxScale*.62+1.6);
   if(S.tex==='drip')effectRadius=Math.max(effectRadius,glyphRadius+maxScale*.55);
   if(S.tex==='neon')effectRadius=Math.max(effectRadius,glyphRadius+maxScale*.675);
+  if(S.uvInk&&S.uvLight)effectRadius=Math.max(effectRadius,glyphRadius+Math.max(6,maxScale*.28)*1.5);
   if(S.atlas)effectRadius=Math.max(effectRadius,glyphRadius*1.05+Math.max(9,maxScale*.085)*2);
   return {brush:S.brush,brushSpread:b.rj,scaleJitter:b.sj,sampleSpacing:sampleSpacing(),maxScale,
     scatterRadius,glyphRadius,effectRadius,snapReach,reach:scatterRadius+effectRadius+snapReach,
@@ -792,13 +815,13 @@ for(const id of toggles)document.getElementById(id).addEventListener('change',e=
 document.getElementById('anchorIn').addEventListener('input',e=>{if(busy)return;beginChange();parseAnchors(e.target.value);scheduleFinish('Symbol selection changed');});
 document.getElementById('accentC').addEventListener('input',e=>setting('accent',e.target.value));
 for(const[id,key]of [['swBg','bg'],['swInk','ink']])document.getElementById(id).addEventListener('click',()=>{const v=prompt(key==='bg'?'Background hex':'Ink hex',S[key]);if(v&&/^#[0-9a-f]{6}$/i.test(v))action('Palette changed',()=>{S[key]=v;});});
-document.querySelectorAll('.chip[data-p]').forEach(el=>el.addEventListener('click',()=>action('Palette changed',()=>Object.assign(S,presets[el.dataset.p]))));
+document.querySelectorAll('.chip[data-p]').forEach(el=>el.addEventListener('click',()=>action('Palette changed',()=>Object.assign(S,presets[el.dataset.p],{uvInk:false}))));
 const brushWrap=document.getElementById('brushes');
 for(const k of brushNames){const b=BRUSHES[k],el=document.createElement('button');el.type='button';el.className='brush';el.dataset.brush=k;el.innerHTML='<b>'+b.name+'</b><span class="dim">'+b.desc+'</span>';el.onclick=()=>action('Brush selected',()=>{S.brush=k;});brushWrap.append(el);}
 for(const n of setNames){const el=document.createElement('option');el.value=n;el.textContent=n+' ('+window.SIGIL_LIB.filter(e=>e.s===n||n==='all').length+')';setSel.append(el);}
 function applyLens(key){return action('Lens applied to future marks',()=>{
   const l=LENSES[key];S.lens=key;if(!l)return;
-  Object.assign(S,{brush:l.brush,chaos:l.chaos,scale:l.scale,gap:l.gap,brushR:l.brushR,dens:l.dens,op:l.op/100,rays:!!l.rays,noRepeat:!!l.noRepeat,bimodal:!!l.bimodal,snap:l.snap,anchorPower:l.anchorP||0,set:'all'},presets[l.preset]);
+  Object.assign(S,{brush:l.brush,chaos:l.chaos,scale:l.scale,gap:l.gap,brushR:l.brushR,dens:l.dens,op:l.op/100,rays:!!l.rays,noRepeat:!!l.noRepeat,bimodal:!!l.bimodal,snap:l.snap,anchorPower:l.anchorP||0,set:'all',uvInk:false},presets[l.preset]);
   anchorNames=(l.anchors||[]).slice();applySet();
 });}
 document.querySelectorAll('#lensChips .chip').forEach(el=>el.addEventListener('click',()=>applyLens(el.dataset.l)));
@@ -830,18 +853,22 @@ function exportPNG(scale=Number(document.getElementById('expK').value)||2){
 }
 const xml=v=>String(v).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[ch]));
 function stampSVG(st,i){
-  const sym=BYNAME.get(st.n),b=BRUSHES[st.brush],u=st.s/1000,t='translate('+st.x+' '+st.y+') rotate('+(st.ang*180/Math.PI)+') scale('+u+') translate(-500 -500)',ink=st.effectInk||st.ink;
+  const sym=BYNAME.get(st.n),b=BRUSHES[st.brush],u=st.s/1000,t='translate('+st.x+' '+st.y+') rotate('+(st.ang*180/Math.PI)+') scale('+u+') translate(-500 -500)';
+  const appearance=getInkAppearance(st.ink,st.uvInk===true),pigment=appearance.color,accent=getInkAppearance(st.accent,st.uvInk===true).color,ink=getInkAppearance(st.effectInk||st.ink,st.uvInk===true).color;
   const out=[],defs=[],path=(color,alpha)=>'<path d="'+sym.d+'" fill="'+color+'" fill-opacity="'+alpha+'"/>';
   for(const r of st.rays)out.push('<line x1="'+(st.x+Math.cos(r.ra)*st.s*.5)+'" y1="'+(st.y+Math.sin(r.ra)*st.s*.5)+'" x2="'+(st.x+Math.cos(r.ra)*r.len)+'" y2="'+(st.y+Math.sin(r.ra)*r.len)+'" stroke="'+ink+'" stroke-opacity=".22" stroke-width="'+Math.max(1,st.s*.045)+'"/>');
   if(b.pool){defs.push('<radialGradient id="pool'+i+'"><stop offset="0" stop-color="#000" stop-opacity=".22"/><stop offset=".75" stop-color="#000" stop-opacity=".1"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>');out.push('<circle cx="'+st.x+'" cy="'+st.y+'" r="'+(st.s*1.1)+'" fill="url(#pool'+i+')"/>');}
-  let filter='';if(st.tex==='neon'){defs.push('<filter id="neon'+i+'" x="-200%" y="-200%" width="500%" height="500%"><feDropShadow dx="0" dy="0" stdDeviation="225" flood-color="'+st.ink+'"/></filter>');filter=' filter="url(#neon'+i+')"';}
-  out.push('<g transform="'+t+'"'+filter+'>'+path(st.ink,st.a));
-  if(st.duo)out.push('<g transform="translate(500 500) scale(.6) translate(-500 -500)">'+path(st.accent,st.a*.9)+'</g>');
+  let filter='';if(st.tex==='neon'||appearance.glow){
+    const id=(appearance.glow?'uv-glow':'neon')+i,sigma=st.tex==='neon'?225:Math.max(6,st.s*.28)/(2*u);
+    defs.push('<filter id="'+id+'" x="-200%" y="-200%" width="500%" height="500%"'+(appearance.glow?' color-interpolation-filters="sRGB"':'')+'><feDropShadow dx="0" dy="0" stdDeviation="'+sigma+'" flood-color="'+(appearance.glow||pigment)+'"/></filter>');filter=' filter="url(#'+id+')"';
+  }
+  out.push('<g transform="'+t+'" data-uv-ink="'+(st.uvInk===true)+'"'+filter+'>'+path(pigment,st.a));
+  if(st.duo)out.push('<g transform="translate(500 500) scale(.6) translate(-500 -500)">'+path(accent,st.a*.9)+'</g>');
   if(st.tex==='gloss'){const gy=500-sym.h*.5;defs.push('<linearGradient id="gloss'+i+'" gradientUnits="userSpaceOnUse" x1="0" x2="0" y1="'+gy+'" y2="'+(gy+sym.h*.92)+'"><stop offset="0" stop-color="#fff" stop-opacity=".55"/><stop offset=".45" stop-color="#fff" stop-opacity=".12"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>');out.push('<path d="'+sym.d+'" fill="url(#gloss'+i+')"/><circle cx="'+(500-sym.w*.24)+'" cy="'+(500-sym.h*.26)+'" r="22" fill="#fff" fill-opacity=".5"/>');}
   out.push('</g>');
-  for(const sp of st.specks)out.push('<circle cx="'+sp.sx+'" cy="'+sp.sy+'" r="'+sp.r+'" fill="'+st.ink+'" fill-opacity="'+sp.a+'"/>');
-  for(const d of st.drips)out.push('<path d="M'+(d.lx-d.sw*.5)+' '+d.byp+' Q'+(d.lx+d.sway*.25)+' '+(d.byp+d.L*.55)+' '+(d.lx+d.sway)+' '+(d.byp+d.L)+' Q'+(d.lx+d.sway*.45)+' '+(d.byp+d.L*.85)+' '+(d.lx+d.sw*.5)+' '+d.byp+' Z" fill="'+st.ink+'" fill-opacity=".94"/>');
-  if(st.atlas)out.push('<text transform="translate('+(st.x-st.r*.95)+' '+(st.y-st.r*.95)+') rotate('+(-st.ang*180/Math.PI)+')" font-family="monospace" font-size="'+Math.max(9,u*85)+'" text-anchor="middle" dominant-baseline="middle" fill="'+st.ink+'" fill-opacity=".55">'+window.SIGIL_INDEX[st.n]+'</text>');
+  for(const sp of st.specks)out.push('<circle cx="'+sp.sx+'" cy="'+sp.sy+'" r="'+sp.r+'" fill="'+pigment+'" fill-opacity="'+sp.a+'"/>');
+  for(const d of st.drips)out.push('<path d="M'+(d.lx-d.sw*.5)+' '+d.byp+' Q'+(d.lx+d.sway*.25)+' '+(d.byp+d.L*.55)+' '+(d.lx+d.sway)+' '+(d.byp+d.L)+' Q'+(d.lx+d.sway*.45)+' '+(d.byp+d.L*.85)+' '+(d.lx+d.sw*.5)+' '+d.byp+' Z" fill="'+pigment+'" fill-opacity=".94"/>');
+  if(st.atlas)out.push('<text transform="translate('+(st.x-st.r*.95)+' '+(st.y-st.r*.95)+') rotate('+(-st.ang*180/Math.PI)+')" font-family="monospace" font-size="'+Math.max(9,u*85)+'" text-anchor="middle" dominant-baseline="middle" fill="'+pigment+'" fill-opacity=".55">'+window.SIGIL_INDEX[st.n]+'</text>');
   for(const d of st.dots)out.push('<circle cx="'+d.dx+'" cy="'+d.dy+'" r="'+d.r+'" fill="'+ink+'" fill-opacity=".3"/>');
   if(b.edge)out.push('<g transform="translate(1.2 1.2) '+t+'">'+path(ink,st.a*.3)+'</g>');
   return '<defs>'+defs.join('')+'</defs>'+out.join('');
@@ -849,9 +876,9 @@ function stampSVG(st,i){
 function svgDocument(){
   const out=['<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 '+W+' '+H+'" width="'+W+'" height="'+H+'" style="isolation:isolate">'];
   const rect=(x,y,w,h,color)=>'<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" fill="'+color+'"/>';
-  if(S.bgMode==='plain')out.push(rect(0,0,W,H,S.bg));
-  else if(S.bgMode==='quad')['#e87fb8','#efe9dc','#efe9dc','#e8a272'].forEach((c,i)=>out.push(rect(i%2*W/2,Math.floor(i/2)*H/2,W/2,H/2,c)));
-  else ['#e87fb8','#e8a272','#e8d072','#efe9dc'].forEach((c,i)=>out.push(rect(i*W/4,0,W/4,H,c)));
+  if(S.bgMode==='plain')out.push(rect(0,0,W,H,backgroundAppearance(S.bg)));
+  else if(S.bgMode==='quad')['#e87fb8','#efe9dc','#efe9dc','#e8a272'].forEach((c,i)=>out.push(rect(i%2*W/2,Math.floor(i/2)*H/2,W/2,H/2,backgroundAppearance(c))));
+  else ['#e87fb8','#e8a272','#e8d072','#efe9dc'].forEach((c,i)=>out.push(rect(i*W/4,0,W/4,H,backgroundAppearance(c))));
   layers.forEach((L,layerIndex)=>{
     if(!L.visible)return;
     const artId='layer-art-'+layerIndex,shadowId='layer-shadow-'+layerIndex,shadow=L.shadow;
@@ -892,6 +919,7 @@ function normalizedSettings(raw){
   for(const[k,[min,max]]of Object.entries(bounds))s[k]=finite(raw[k],min,max,s[k]);
   for(const k of ['bg','ink','accent'])s[k]=color(raw[k],s[k]);
   for(const k of toggles)s[k]=raw[k]===undefined?s[k]:!!raw[k];
+  for(const k of ['uvInk','uvLight'])s[k]=raw[k]===true;
   s.anchors=Array.isArray(raw.anchors)?raw.anchors.filter(n=>typeof n==='string'&&BYNAME.has(n)).slice(0,500):[];return s;
 }
 function decodeBase(data){
@@ -918,7 +946,7 @@ async function normalizeProject(raw){
     if(!Array.isArray(raw.stamps)||raw.stamps.length>25000)throw new Error('Invalid mark list');
     for(const r of raw.stamps){
       if(!r||!ids.has(r.layerId)||!BYNAME.has(r.n)||!['x','y','s','ang','a','r'].every(k=>Number.isFinite(r[k]))||r.s<=0||r.s>10000||r.r<0||Math.abs(r.x)>100000||Math.abs(r.y)>100000)throw new Error('Invalid mark');
-      const item={n:r.n,layerId:r.layerId,x:r.x,y:r.y,s:r.s,ang:r.ang,a:finite(r.a,0,1,1),r:r.r,ink:color(r.ink,st.settings.ink),accent:color(r.accent,st.settings.accent),effectInk:color(r.effectInk,color(r.ink,st.settings.ink)),brush:brushNames.includes(r.brush)?r.brush:'finetip',tex:enums.tex.includes(r.tex)?r.tex:'flat',duo:!!r.duo,atlas:!!r.atlas};
+      const item={n:r.n,layerId:r.layerId,x:r.x,y:r.y,s:r.s,ang:r.ang,a:finite(r.a,0,1,1),r:r.r,ink:color(r.ink,st.settings.ink),accent:color(r.accent,st.settings.accent),effectInk:color(r.effectInk,color(r.ink,st.settings.ink)),brush:brushNames.includes(r.brush)?r.brush:'finetip',tex:enums.tex.includes(r.tex)?r.tex:'flat',duo:!!r.duo,atlas:!!r.atlas,uvInk:r.uvInk===true};
       for(const[k,fields]of Object.entries({drips:['lx','byp','L','sw','sway'],rays:['ra','len'],specks:['sx','sy','r','a'],dots:['dx','dy','r']})){
         if(!Array.isArray(r[k])||r[k].length>100)throw new Error('Invalid brush effects');
         item[k]=r[k].map(e=>{if(!e||fields.some(f=>!Number.isFinite(e[f])||Math.abs(e[f])>1e6)||('r'in e&&e.r<0))throw new Error('Invalid brush effect');return Object.fromEntries(fields.map(f=>[f,e[f]]));});
@@ -945,11 +973,15 @@ function newProject(width=1200,height=900){
   return action('New document',()=>{W=width;H=height;stamps=[];layers=[];newLayer('Layer 1');activeLayer=0;cv.width=W;cv.height=H;geoIdx=0;lastSym=null;rand=mulberry32(documentSeed);rebuildGrid();resize();});
 }
 function selectSymbol(name){if(name!==null&&!BYNAME.has(name))return false;return action(name?'Symbol selected':'Symbol selection cleared',()=>{anchorNames=name?[name]:[];S.anchorPower=name?100:0;S.noRepeat=false;S.set='all';applySet();});}
+function selectInk(pigment,reactive=false){
+  if(typeof pigment!=='string'||!/^#[\da-f]{6}$/i.test(pigment))return false;
+  return action('Ink selected',()=>{S.ink=pigment;S.uvInk=reactive===true;});
+}
 function setOption(key,value){
   if(key==='anchors')return action('Symbols selected',()=>{anchorNames=Array.isArray(value)?value.filter(n=>BYNAME.has(n)):[];applySet();});
   if(!Object.hasOwn(DEFAULT_SETTINGS,key))return false;
   const next=normalizedSettings({...S,anchors:anchorNames,[key]:value});
-  return action('Settings changed',()=>{S[key]=next[key];if(key==='set')applySet();});
+  return action('Settings changed',()=>{S[key]=next[key];if(key==='set')applySet();if(key==='uvLight')for(const L of layers)renderLayer(L);});
 }
 window.addEventListener('keydown',e=>{
   if(e.defaultPrevented||e.altKey||e.target.closest?.('input,textarea,select,[contenteditable=true]'))return;
@@ -960,7 +992,7 @@ window.addEventListener('keydown',e=>{
 });
 cv.width=W;cv.height=H;newLayer('Layer 1');activeLayer=0;syncUI();renderLayerList();compositeAll();resize();
 try{recoveryAvailable=!!localStorage.getItem(RECOVERY_KEY);}catch{}
-window.SigilStudio={undo,redo,canUndo:()=>history.length>0||!!pendingBefore,canRedo:()=>future.length>0,save:saveProject,load:loadProject,clear:clearAll,refresh:()=>{resize();compositeAll();emitChange();},getState:summary,getBrushPreview,setLayerShadow,getProject:()=>JSON.parse(JSON.stringify(collectState())),exportPNG,exportSVG,selectSymbol,setOption,newProject,autoSpray,applyLens,
+window.SigilStudio={undo,redo,canUndo:()=>history.length>0||!!pendingBefore,canRedo:()=>future.length>0,save:saveProject,load:loadProject,clear:clearAll,refresh:()=>{resize();compositeAll();emitChange();},getState:summary,getBrushPreview,getInkAppearance,selectInk,setLayerShadow,getProject:()=>JSON.parse(JSON.stringify(collectState())),exportPNG,exportSVG,selectSymbol,setOption,newProject,autoSpray,applyLens,
   restoreRecovery:async()=>{try{const raw=localStorage.getItem(RECOVERY_KEY);return raw?loadProject(JSON.parse(raw)):false;}catch{status='Recovery file is unreadable';emitChange();return false;}},
   discardRecovery:()=>{try{localStorage.removeItem(RECOVERY_KEY);recoveryAvailable=false;emitChange();}catch{}},
   getSVG:svgDocument};

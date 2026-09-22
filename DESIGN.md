@@ -17,12 +17,12 @@ Fonts are bundled locally with their licenses.
 
 The newer console direction deliberately uses softer corners and physical
 controls than the broader brand's industrial panels. Shading and pointer response
-give controls depth. The artwork itself is never tilted, graded or filtered.
+give controls depth. The shell never tilts, grades or filters the artwork.
 The drawing remains Canvas 2D; the shell does not add a WebGL dependency.
 
 ## Anatomy
 
-- **Header:** instrument name, Project, Export.
+- **Header:** instrument name, UV light, Project, Export.
 - **Stage:** a stable document fitted inside a responsive console without side
   handles or grips.
 - **Quick actions:** Undo, Redo, Burst, Help. Compact controls sit below the stage
@@ -76,3 +76,19 @@ It preserves brush randomness rather than replacing it with a rigid uniform line
 Each layer can cast a shadow onto content beneath it. Shadow is off by default;
 distance, softness and strength are opt-in controls inside Layers. The same
 document settings drive the on-screen composition, project file and exports.
+
+## The blacklight reveal
+
+The UV light is a persistent, plainly labeled switch. Reactive ink is a material
+selected in Ink, independent of whether the lamp is currently on. A mark remembers
+its own material. This lets a maker build a quieter daylight composition with a
+second fluorescent layer of meaning revealed by the light.
+
+The ordinary interface retains its bone/void palette. Turning on UV dims the room
+and adds a new functional lamp color (#B29AFF) and atmosphere (#24133D); these colors
+belong to the blacklight state. Reactive swatches use the established phosphor,
+magenta, copper, signal and bone colors. Syne and the existing controls stay intact.
+No flashing, constant pulsing, full-screen filter, or extra floating toolbar.
+
+The renderer changes the selected lighting for both the canvas and its exports.
+UI state communicates ink material, lamp state and exported appearance separately.
